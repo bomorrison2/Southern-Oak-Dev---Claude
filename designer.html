@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>ArchForm — AI Design Tool</title>
+  <link rel="stylesheet" href="css/shared.css"/>
+  <style>
+    /* ── DESIGNER PAGE STYLES ─────────────────────────────── */
+
+    /* EDITOR IMPORT BANNER */
+    .editor-banner {
+      display: none; align-items: center; gap: 12px; padding: 10px 40px;
+      background: rgba(26,108,255,0.08); border-bottom: 1px solid rgba(26,108,255,0.2);
+      font-family: var(--mono); font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase;
+      color: var(--blue-light); position: relative; z-index: 1;
+    }
+    .editor-banner.show { display: flex; }
+    .editor-banner a { color: var(--text-dim); text-decoration: none; margin-left: auto; }
+    .editor-banner a:hover { color: var(--text); }
+    .editor-banner .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--blue); animation: pulse-dot 1.5s ease infinite; }
+    @keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+    /* NAV */
+    nav {
+      position: sticky; top: 0; z-index: 100; height: 64px;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 40px; background: rgba(10,13,18,0.9);
+      backdrop-filter: blur(20px); border-bottom: 1px solid var(--line);
+    }
+    .nav-tag {
+      font-family: var(--mono); font-size: 10px; letter-spacing: 2px;
+      text-transform: uppercase; color: var(--blue-light);
+      border: 1px solid var(--line2); padding: 4px 12px;
+    }
+
+    /* TWO-COLUMN APP LAYOUT */
+    .app {
+      position: relative; z-index: 1;
+      display: grid; grid-template-columns: 420px 1fr;
+      min-height: calc(100vh - 64px);
+    }
+
+    /* FORM PANEL */
+    .panel-form { border-right: 1px solid var(--line); overflow-y: auto; background: var(--bg2); }
+    .panel-header { padding: 36px 36px 28px; border-bottom: 1px solid var(--line); }
+    .panel-eyebrow {
+      font-family: var(--mono); font-size: 10px; letter-spacing: 2px;
+      text-transform: uppercase; color: var(--blue-light); margin-bottom: 10px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .panel-eyebrow::before { content: ''; width: 16px; height: 1px; background: var(--blue-light); }
+    .panel-title { font-family: var(--display); font-size: 38px; letter-spacing: 1px; line-height: 1; }
+    .panel-sub { margin-top: 10px; font-size: 13px; color: var(--text-dim); line-height: 1.6; }
+
+    /* FORM SECTIONS */
+    .form-section { padding: 28px 36px; border-bottom: 1px solid var(--line); }
+    .form-section-title {
+      font-family: var(--mono); font-size: 10px; letter-spacing: 2px;
+      text-transform: uppercase; color: var(--text-dimmer); margin-bottom: 20px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .form-section-title::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+    .field { margin-bottom: 18px; }
+    .field:last-child { margin-bottom: 0; }
+    label { display: block; font-family: var(--mono); font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--text-dim); margin-bottom: 8px; }
+    input, select, textarea {
+      width: 100%; background: var(--bg3); border: 1px solid var(--line);
+      color: var(--text); font-family: var(--body); font-size: 14px; font-weight: 300;
+      padding: 10px 14px; outline: none; transition: border-color 0.2s; appearance: none;
+    }
+    input:focus, select:focus, textarea:focus { border-color: var(--blue); background: var(--bg4); }
+    select {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='rgba(232,237,245,0.3)' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 12px center; padding-right: 36px; cursor: pointer;
+    }
+    textarea { resize: vertical; min-height: 80px; line-height: 1.6; }
+    .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+    /* UNIT MIX */
+    .unit-types { display: flex; flex-direction: column; gap: 10px; }
+    .unit-type-row {
+      display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px;
+      background: var(--bg3); border: 1px solid var(--line); padding: 10px 14px;
+    }
+    .unit-type-name { font-size: 13px; }
+    .unit-type-control { display: flex; align-items: center; gap: 8px; }
+    .unit-count-btn {
+      width: 26px; height: 26px; border: 1px solid var(--line); background: transparent;
+      color: var(--text); cursor: pointer; font-size: 16px; display: flex; align-items: center; justify-content: center; transition: all 0.15s;
+    }
+    .unit-count-btn:hover { border-color: var(--blue); color: var(--blue-light); }
+    .unit-count { font-family: var(--mono); font-size: 14px; color: var(--text); min-width: 24px; text-align: center; }
+
+    /* GENERATE BUTTON */
+    .generate-wrap { padding: 28px 36px; }
+    .btn-generate {
+      width: 100%; padding: 16px; background: var(--blue); border: none;
+      color: #fff; font-family: var(--mono); font-size: 12px; letter-spacing: 2px;
+      text-transform: uppercase; cursor: pointer; position: relative; overflow: hidden;
+      transition: all 0.25s; display: flex; align-items: center; justify-content: center; gap: 10px;
+    }
+    .btn-generate:hover { background: var(--blue-light); transform: translateY(-1px); box-shadow: 0 12px 32px rgba(26,108,255,0.3); }
+    .btn-generate:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
+    .btn-generate .spinner { width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite; display: none; }
+    .btn-generate.loading .spinner { display: block; }
+    @keyframes spin { to{transform:rotate(360deg)} }
+
+    /* OUTPUT PANEL */
+    .panel-output { display: flex; flex-direction: column; overflow-y: auto; }
+
+    /* EMPTY STATE */
+    .empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 60px; text-align: center; gap: 20px; }
+    .empty-icon { width: 80px; height: 80px; border: 1px solid var(--line2); display: flex; align-items: center; justify-content: center; position: relative; margin-bottom: 8px; }
+    .empty-icon svg { width: 36px; height: 36px; stroke: var(--blue); fill: none; stroke-width: 1; opacity: 0.5; }
+    .empty-title { font-family: var(--display); font-size: 28px; letter-spacing: 1px; color: var(--text-dimmer); }
+    .empty-sub { font-size: 13px; color: var(--text-dimmer); max-width: 300px; line-height: 1.65; }
+
+    /* LOADING STATE */
+    .loading-state { flex: 1; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 28px; padding: 60px; }
+    .loading-state.active { display: flex; }
+    .scan-animation { width: 200px; height: 200px; position: relative; border: 1px solid var(--line2); }
+    .scan-line { position: absolute; left: 0; right: 0; height: 2px; background: linear-gradient(90deg,transparent,var(--cyan),transparent); animation: scan 1.8s ease-in-out infinite; }
+    @keyframes scan { 0%,100%{top:0;opacity:0} 10%{opacity:1} 90%{opacity:1} 100%{top:198px;opacity:0} }
+    .scan-grid { position: absolute; inset: 0; background-image: linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px); background-size: 20px 20px; }
+    .scan-corner { position: absolute; width: 12px; height: 12px; }
+    .scan-corner.tl{top:0;left:0;border-top:2px solid var(--cyan);border-left:2px solid var(--cyan)}
+    .scan-corner.tr{top:0;right:0;border-top:2px solid var(--cyan);border-right:2px solid var(--cyan)}
+    .scan-corner.bl{bottom:0;left:0;border-bottom:2px solid var(--cyan);border-left:2px solid var(--cyan)}
+    .scan-corner.br{bottom:0;right:0;border-bottom:2px solid var(--cyan);border-right:2px solid var(--cyan)}
+    .loading-label { font-family: var(--mono); font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: var(--blue-light); }
+    .loading-steps { display: flex; flex-direction: column; gap: 8px; }
+    .loading-step { font-family: var(--mono); font-size: 10px; letter-spacing: 1px; color: var(--text-dimmer); display: flex; align-items: center; gap: 10px; }
+    .loading-step.active { color: var(--cyan); }
+    .loading-step .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+    /* OUTPUT CONTENT */
+    .output-content { display: none; flex-direction: column; }
+    .output-content.active { display: flex; }
+    .output-header { padding: 32px 48px 24px; border-bottom: 1px solid var(--line); display: flex; align-items: flex-start; justify-content: space-between; }
+    .output-title { font-family: var(--display); font-size: 42px; letter-spacing: 1px; line-height: 1; }
+    .output-meta { display: flex; gap: 24px; margin-top: 12px; }
+    .output-meta-item { font-family: var(--mono); font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--text-dimmer); }
+    .output-meta-item span { color: var(--blue-light); }
+    .status-badge { font-family: var(--mono); font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; padding: 6px 14px; border: 1px solid var(--green); color: var(--green); display: flex; align-items: center; gap: 6px; }
+    .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: pulse-dot 1.5s ease infinite; }
+    .metrics-row { display: grid; grid-template-columns: repeat(4,1fr); border-bottom: 1px solid var(--line); }
+    .metric { padding: 28px 32px; border-right: 1px solid var(--line); }
+    .metric:last-child { border-right: none; }
+    .metric-val { font-family: var(--display); font-size: 40px; letter-spacing: 0.5px; color: var(--text); line-height: 1; }
+    .metric-val.accent { color: var(--blue); }
+    .metric-label { font-family: var(--mono); font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--text-dimmer); margin-top: 6px; }
+    .output-body { display: grid; grid-template-columns: 1fr 1fr; flex: 1; }
+    .output-block { padding: 32px 36px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+    .output-block:nth-child(even){border-right:none} .output-block:nth-last-child(-n+2){border-bottom:none}
+    .block-title { font-family: var(--mono); font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: var(--blue-light); margin-bottom: 20px; display: flex; align-items: center; gap: 8px; }
+    .block-title::after { content: ''; flex: 1; height: 1px; background: var(--line2); }
+    .unit-table { width: 100%; border-collapse: collapse; }
+    .unit-table th { font-family: var(--mono); font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--text-dimmer); text-align: left; padding: 0 0 12px; border-bottom: 1px solid var(--line); }
+    .unit-table td { padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 13px; color: var(--text-dim); }
+    .unit-table td:first-child{color:var(--text);font-weight:400} .unit-table td:last-child{font-family:var(--mono);font-size:11px;color:var(--blue-light)} .unit-table tr:last-child td{border-bottom:none}
+    .compliance-item { margin-bottom: 14px; }
+    .compliance-header { display: flex; justify-content: space-between; margin-bottom: 6px; }
+    .compliance-name { font-size: 12px; color: var(--text-dim); }
+    .compliance-val { font-family: var(--mono); font-size: 11px; color: var(--green); }
+    .bar-track { height: 3px; background: var(--line); }
+    .bar-fill { height: 100%; background: linear-gradient(90deg,var(--blue),var(--cyan)); transition: width 1.2s ease; }
+    .prose-output { font-size: 13px; color: var(--text-dim); line-height: 1.75; }
+    .prose-output h3 { font-family: var(--display); font-size: 18px; letter-spacing: 0.5px; color: var(--text); margin: 16px 0 8px; }
+    .prose-output h3:first-child { margin-top: 0; }
+    .prose-output ul { padding-left: 18px; }
+    .prose-output li { margin-bottom: 5px; }
+    .prose-output strong { color: var(--text); font-weight: 500; }
+    .cost-table { width: 100%; border-collapse: collapse; }
+    .cost-table tr { border-bottom: 1px solid var(--line); }
+    .cost-table tr:last-child { border-bottom: none; }
+    .cost-table td { padding: 9px 0; font-size: 12px; }
+    .cost-table td:first-child{color:var(--text-dim)} .cost-table td:last-child{text-align:right;font-family:var(--mono);font-size:11px;color:var(--text)}
+    .cost-table .total td{color:var(--text);font-weight:500} .cost-table .total td:last-child{color:var(--blue-light);font-size:14px}
+    .output-block.full { grid-column: 1 / -1; border-right: none; }
+    .output-footer { padding: 28px 48px; border-top: 1px solid var(--line); display: flex; gap: 12px; background: var(--bg2); }
+    .btn-secondary { padding: 12px 28px; border: 1px solid var(--line); background: transparent; color: var(--text-dim); font-family: var(--mono); font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; cursor: pointer; transition: all 0.2s; }
+    .btn-secondary:hover { border-color: var(--blue); color: var(--blue-light); }
+
+    /* ERROR */
+    .error-msg { display: none; margin: 0 36px 20px; padding: 14px 18px; border: 1px solid rgba(255,80,80,0.3); background: rgba(255,80,80,0.05); font-family: var(--mono); font-size: 11px; color: rgba(255,120,120,0.8); letter-spacing: 0.5px; }
+    .error-msg.active { display: block; }
+
+    @media (max-width: 900px) {
+      .app { grid-template-columns: 1fr; }
+      .panel-form { border-right: none; border-bottom: 1px solid var(--line); }
+      .metrics-row { grid-template-columns: repeat(2,1fr); }
+      .output-body { grid-template-columns: 1fr; }
+      .output-block { border-right: none; }
+      .output-header { padding: 24px; flex-direction: column; gap: 16px; }
+    }
+  </style>
+</head>
+<body>
+
+<nav>
+  <a href="index.html" class="nav-logo"><div class="logo-mark"></div>ARCHFORM</a>
+  <div class="nav-tag">AI Design Tool — Beta</div>
+  <a href="projects.html" class="nav-link-ghost">My Projects</a>
+</nav>
+
+<div class="editor-banner" id="editorBanner">
+  <div class="dot"></div>
+  <span>Parameters imported from Site Editor</span>
+  <a href="editor.html">← Back to Editor</a>
+</div>
+
+<div class="app">
+
+  <!-- FORM PANEL -->
+  <div class="panel-form">
+    <div class="panel-header">
+      <div class="panel-eyebrow">Parameters</div>
+      <div class="panel-title">DESIGN INPUT</div>
+      <p class="panel-sub">Enter your building criteria and let AI generate a full residential design brief instantly.</p>
+    </div>
+
+    <div class="form-section">
+      <div class="form-section-title">Site Parameters</div>
+      <div class="field-row">
+        <div class="field"><label>Site Area (m²)</label><input type="number" id="siteArea" value="2500" min="100"/></div>
+        <div class="field"><label>Plot Ratio (FAR)</label><input type="number" id="far" value="2.5" step="0.1" min="0.1"/></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Max Height (floors)</label><input type="number" id="floors" value="8" min="1" max="50"/></div>
+        <div class="field">
+          <label>Site Shape</label>
+          <select id="siteShape">
+            <option>Rectangular</option><option>L-Shaped</option><option>Irregular</option><option>Corner Lot</option>
+          </select>
+        </div>
+      </div>
+      <div class="field"><label>Location / Context</label><input type="text" id="location" placeholder="e.g. Urban city centre, Madrid"/></div>
+    </div>
+
+    <div class="form-section">
+      <div class="form-section-title">Unit Mix</div>
+      <div class="unit-types">
+        <div class="unit-type-row"><div class="unit-type-name">Studio (1-bed)</div><div class="unit-type-control"><button class="unit-count-btn">−</button><div class="unit-count" id="count-studio">4</div><button class="unit-count-btn">+</button></div></div>
+        <div class="unit-type-row"><div class="unit-type-name">2-Bedroom</div><div class="unit-type-control"><button class="unit-count-btn">−</button><div class="unit-count" id="count-two">8</div><button class="unit-count-btn">+</button></div></div>
+        <div class="unit-type-row"><div class="unit-type-name">3-Bedroom</div><div class="unit-type-control"><button class="unit-count-btn">−</button><div class="unit-count" id="count-three">4</div><button class="unit-count-btn">+</button></div></div>
+        <div class="unit-type-row"><div class="unit-type-name">Penthouse</div><div class="unit-type-control"><button class="unit-count-btn">−</button><div class="unit-count" id="count-pent">2</div><button class="unit-count-btn">+</button></div></div>
+      </div>
+    </div>
+
+    <div class="form-section">
+      <div class="form-section-title">Room Specifications</div>
+      <div class="field-row">
+        <div class="field"><label>Min Bedroom (m²)</label><input type="number" id="minBed" value="12"/></div>
+        <div class="field"><label>Min Living Room (m²)</label><input type="number" id="minLiving" value="20"/></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Min Kitchen (m²)</label><input type="number" id="minKitchen" value="8"/></div>
+        <div class="field"><label>Floor-to-Floor Height (m)</label><input type="number" id="floorHeight" value="3.0" step="0.1"/></div>
+      </div>
+    </div>
+
+    <div class="form-section">
+      <div class="form-section-title">Programme</div>
+      <div class="field">
+        <label>Parking Strategy</label>
+        <select id="parking"><option>Below Grade (basement)</option><option>Surface Level</option><option>Multi-Storey Podium</option><option>No Parking</option></select>
+      </div>
+      <div class="field">
+        <label>Ground Floor Use</label>
+        <select id="groundFloor"><option>Residential Lobby + Amenities</option><option>Retail / Commercial</option><option>Mixed Retail + Residential</option><option>Parking Access</option></select>
+      </div>
+      <div class="field"><label>Additional Requirements</label><textarea id="additional" placeholder="e.g. Rooftop terrace, gym, concierge, sustainability targets, local regulations..."></textarea></div>
+    </div>
+
+    <div class="error-msg" id="errorMsg"></div>
+
+    <div class="generate-wrap">
+      <button class="btn-generate" id="generateBtn" onclick="generate()">
+        <div class="spinner"></div>
+        <span class="btn-label">Generate Design Brief</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- OUTPUT PANEL -->
+  <div class="panel-output" id="panelOutput">
+
+    <div class="empty-state" id="emptyState">
+      <div class="empty-icon">
+        <svg viewBox="0 0 48 48"><rect x="8" y="8" width="32" height="32"/><line x1="8" y1="20" x2="40" y2="20"/><line x1="8" y1="32" x2="40" y2="32"/><line x1="20" y1="8" x2="20" y2="40"/></svg>
+      </div>
+      <div class="empty-title">AWAITING PARAMETERS</div>
+      <p class="empty-sub">Fill in your building criteria on the left and click Generate to produce an AI-optimised design brief in real-time.</p>
+    </div>
+
+    <div class="loading-state" id="loadingState">
+      <div class="scan-animation">
+        <div class="scan-grid"></div><div class="scan-line"></div>
+        <div class="scan-corner tl"></div><div class="scan-corner tr"></div>
+        <div class="scan-corner bl"></div><div class="scan-corner br"></div>
+      </div>
+      <div class="loading-label">AI Processing Design</div>
+      <div class="loading-steps">
+        <div class="loading-step active" id="step1"><div class="dot"></div>Analysing site parameters</div>
+        <div class="loading-step" id="step2"><div class="dot"></div>Optimising unit layout</div>
+        <div class="loading-step" id="step3"><div class="dot"></div>Calculating floor areas</div>
+        <div class="loading-step" id="step4"><div class="dot"></div>Generating cost estimate</div>
+        <div class="loading-step" id="step5"><div class="dot"></div>Checking compliance</div>
+      </div>
+    </div>
+
+    <div class="output-content" id="outputContent">
+      <div class="output-header">
+        <div>
+          <div class="output-title" id="outTitle">—</div>
+          <div class="output-meta">
+            <div class="output-meta-item">GFA: <span id="outGFA">—</span></div>
+            <div class="output-meta-item">Units: <span id="outUnits">—</span></div>
+            <div class="output-meta-item">Floors: <span id="outFloors">—</span></div>
+          </div>
+        </div>
+        <div class="status-badge"><div class="status-dot"></div>Design Generated</div>
+      </div>
+
+      <div class="metrics-row">
+        <div class="metric"><div class="metric-val accent" id="mGFA">—</div><div class="metric-label">Gross Floor Area m²</div></div>
+        <div class="metric"><div class="metric-val" id="mUnits">—</div><div class="metric-label">Total Units</div></div>
+        <div class="metric"><div class="metric-val" id="mEff">—</div><div class="metric-label">Avg Unit Size m²</div></div>
+        <div class="metric"><div class="metric-val" id="mCost">—</div><div class="metric-label">Est. Build Cost</div></div>
+      </div>
+
+      <div class="output-body">
+        <div class="output-block">
+          <div class="block-title">Unit Schedule</div>
+          <table class="unit-table"><thead><tr><th>Type</th><th>Qty</th><th>Net Area</th><th>Total m²</th></tr></thead><tbody id="unitTableBody"></tbody></table>
+        </div>
+        <div class="output-block">
+          <div class="block-title">Compliance Check</div>
+          <div class="compliance-list" id="complianceList"></div>
+        </div>
+        <div class="output-block full">
+          <div class="block-title">Design Brief</div>
+          <div class="prose-output" id="designBrief"></div>
+        </div>
+        <div class="output-block">
+          <div class="block-title">Cost Estimate</div>
+          <table class="cost-table" id="costTable"></table>
+        </div>
+        <div class="output-block">
+          <div class="block-title">AI Recommendations</div>
+          <div class="prose-output" id="recommendations"></div>
+        </div>
+      </div>
+
+      <div class="output-footer">
+        <button class="btn-secondary" onclick="resetOutput()">← New Design</button>
+        <button class="btn-secondary" onclick="copyOutput()">Copy Brief</button>
+        <button class="btn-secondary" onclick="saveProject()" id="saveBtn" style="margin-left:auto;border-color:var(--blue);color:var(--blue-light)">Save Project</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="js/shared.js"></script>
+<script src="js/designer.js"></script>
+</body>
+</html>

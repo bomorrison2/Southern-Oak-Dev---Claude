@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>ArchForm — Site Editor</title>
+  <link rel="stylesheet" href="css/shared.css"/>
+  <style>
+    /* ── EDITOR PAGE STYLES ───────────────────────────────── */
+    html, body { height: 100%; overflow: hidden; }
+    body { display: flex; flex-direction: column; }
+
+    /* NAV */
+    nav {
+      height: 56px; display: flex; align-items: center; justify-content: space-between;
+      padding: 0 24px; background: rgba(10,13,18,0.97); border-bottom: 1px solid var(--line);
+      flex-shrink: 0; z-index: 100; gap: 12px;
+    }
+    .nav-tools { display: flex; gap: 4px; }
+    .tool-btn {
+      padding: 6px 12px; border: 1px solid var(--line); background: transparent;
+      color: var(--text-dim); font-family: var(--mono); font-size: 10px; letter-spacing: 1px;
+      text-transform: uppercase; cursor: pointer; transition: all 0.15s;
+    }
+    .tool-btn:hover { border-color: var(--blue); color: var(--blue-light); }
+    .tool-btn.active { background: var(--blue); border-color: var(--blue); color: #fff; }
+    .nav-right { display: flex; gap: 6px; align-items: center; }
+    .view-toggle { display: flex; border: 1px solid var(--line); }
+    .view-btn {
+      padding: 6px 14px; background: transparent; border: none; border-right: 1px solid var(--line);
+      color: var(--text-dim); font-family: var(--mono); font-size: 10px; letter-spacing: 1px;
+      text-transform: uppercase; cursor: pointer; transition: all 0.15s;
+    }
+    .view-btn:last-child { border-right: none; }
+    .view-btn.active { background: var(--bg4); color: var(--cyan); }
+
+    /* LAYOUT */
+    .editor-layout { display: flex; flex: 1; overflow: hidden; }
+
+    /* LEFT SIDEBAR */
+    .sidebar {
+      width: 240px; flex-shrink: 0; background: var(--bg2); border-right: 1px solid var(--line);
+      display: flex; flex-direction: column; overflow-y: auto;
+    }
+    .sb-section { padding: 16px 18px; border-bottom: 1px solid var(--line); }
+    .sb-title {
+      font-family: var(--mono); font-size: 9px; letter-spacing: 2px; text-transform: uppercase;
+      color: var(--text-dimmer); margin-bottom: 12px; display: flex; align-items: center; gap: 6px;
+    }
+    .sb-title::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+    .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .stat-box { background: var(--bg3); padding: 9px 10px; }
+    .stat-val { font-family: var(--display); font-size: 20px; color: var(--text); letter-spacing: 0.5px; line-height: 1; }
+    .stat-val.blue { color: var(--blue); }
+    .stat-val.green { color: var(--green); }
+    .stat-label { font-family: var(--mono); font-size: 7px; letter-spacing: 1px; text-transform: uppercase; color: var(--text-dimmer); margin-top: 3px; }
+    .layer-list { display: flex; flex-direction: column; gap: 4px; }
+    .layer-item {
+      display: flex; align-items: center; gap: 8px; padding: 7px 9px;
+      border: 1px solid var(--line); background: var(--bg3); cursor: pointer; transition: all 0.15s;
+    }
+    .layer-item:hover { border-color: var(--line2); }
+    .layer-item.active { border-color: var(--blue); background: rgba(26,108,255,0.08); }
+    .layer-dot { width: 7px; height: 7px; flex-shrink: 0; }
+    .layer-name { flex: 1; font-size: 11px; }
+    .layer-count { font-family: var(--mono); font-size: 9px; color: var(--text-dimmer); }
+    .ctrl-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+    .ctrl-label { font-size: 11px; color: var(--text-dim); }
+    .ctrl-val { font-family: var(--mono); font-size: 11px; color: var(--text); }
+    .slider { width: 100%; -webkit-appearance: none; height: 2px; background: var(--line); outline: none; margin-top: 5px; }
+    .slider::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; background: var(--blue); cursor: pointer; }
+    .slider:hover::-webkit-slider-thumb { background: var(--blue-light); }
+    .preset-list { display: flex; flex-direction: column; gap: 4px; }
+    .preset-btn {
+      padding: 7px 10px; border: 1px solid var(--line); background: transparent;
+      color: var(--text-dim); font-family: var(--mono); font-size: 9px; letter-spacing: 1px;
+      text-transform: uppercase; cursor: pointer; transition: all 0.15s; text-align: left;
+    }
+    .preset-btn:hover { border-color: var(--blue); color: var(--blue-light); }
+    .hints { padding: 14px 18px; font-size: 10px; color: var(--text-dimmer); line-height: 1.9; }
+    .kbd { display: inline-block; padding: 1px 5px; background: var(--bg4); border: 1px solid var(--line); font-family: var(--mono); font-size: 8px; color: var(--text-dim); }
+
+    /* CANVAS */
+    .canvas-wrap { flex: 1; position: relative; overflow: hidden; background: var(--bg); }
+    .canvas-wrap::before {
+      content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 0;
+      background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px);
+      background-size: 40px 40px;
+    }
+    #c2d { display: block; width: 100%; height: 100%; position: absolute; inset: 0; z-index: 1; }
+    #c3d { display: none; width: 100%; height: 100%; position: absolute; inset: 0; z-index: 1; }
+    .hud { position: absolute; bottom: 16px; left: 16px; font-family: var(--mono); font-size: 9px; color: var(--text-dimmer); letter-spacing: 1px; z-index: 10; background: rgba(10,13,18,0.7); padding: 4px 8px; }
+    .hint-bar {
+      position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+      font-family: var(--mono); font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase;
+      color: var(--cyan); background: rgba(10,13,18,0.88); padding: 5px 14px;
+      border: 1px solid rgba(0,212,255,0.2); z-index: 10; pointer-events: none; white-space: nowrap;
+    }
+    .compass {
+      position: absolute; bottom: 16px; right: 16px; width: 44px; height: 44px;
+      border: 1px solid var(--line2); background: rgba(10,13,18,0.8); display: flex;
+      align-items: center; justify-content: center; z-index: 10;
+    }
+    .compass svg { width: 26px; height: 26px; }
+
+    /* RIGHT PANEL */
+    .rpanel {
+      width: 210px; flex-shrink: 0; background: var(--bg2); border-left: 1px solid var(--line);
+      display: flex; flex-direction: column; overflow-y: auto;
+    }
+    .rp-section { padding: 14px 16px; border-bottom: 1px solid var(--line); }
+    .rp-title { font-family: var(--mono); font-size: 9px; letter-spacing: 2px; text-transform: uppercase; color: var(--text-dimmer); margin-bottom: 10px; }
+    .prop-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 7px; }
+    .prop-l { font-size: 11px; color: var(--text-dim); }
+    .prop-v { font-family: var(--mono); font-size: 11px; color: var(--text); }
+    .prop-v.acc { color: var(--blue-light); }
+    .color-row { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 4px; }
+    .chip { width: 20px; height: 20px; cursor: pointer; border: 2px solid transparent; transition: border-color 0.1s; }
+    .chip.on { border-color: #fff; }
+    .del-btn {
+      width: 100%; padding: 7px; background: rgba(255,60,60,0.07); border: 1px solid rgba(255,60,60,0.2);
+      color: rgba(255,100,100,0.65); font-family: var(--mono); font-size: 9px; letter-spacing: 1.5px;
+      text-transform: uppercase; cursor: pointer; margin-top: 8px; transition: all 0.15s;
+    }
+    .del-btn:hover { background: rgba(255,60,60,0.14); color: rgba(255,130,130,0.9); }
+    .no-sel { padding: 16px; font-size: 11px; color: var(--text-dimmer); line-height: 1.65; text-align: center; }
+  </style>
+</head>
+<body>
+
+<nav>
+  <a href="index.html" class="nav-logo"><div class="logo-mark"></div>ARCHFORM</a>
+  <a href="projects.html" class="nav-link-ghost">My Projects</a>
+  <div class="nav-tools">
+    <button class="tool-btn active" id="toolSite"   onclick="setTool('site')">⬡ Site</button>
+    <button class="tool-btn"        id="toolBuild"  onclick="setTool('building')">▦ Building</button>
+    <button class="tool-btn"        id="toolSelect" onclick="setTool('select')">↖ Select</button>
+    <button class="tool-btn" onclick="clearAll()" style="border-color:rgba(255,80,80,0.3);color:rgba(255,100,100,0.6)">✕ Clear</button>
+  </div>
+  <div class="nav-right">
+    <div class="view-toggle">
+      <button class="view-btn active" id="btn2d" onclick="setView('2d')">2D Plan</button>
+      <button class="view-btn"        id="btn3d" onclick="setView('3d')">3D View</button>
+    </div>
+    <button class="btn-s ghost" onclick="saveEditorProject()">Save Project</button>
+    <button class="btn-s ghost" onclick="exportData()">Export JSON</button>
+    <button class="btn-s"       onclick="sendToDesigner()">AI Brief →</button>
+  </div>
+</nav>
+
+<div class="editor-layout">
+  <div class="sidebar">
+    <div class="sb-section">
+      <div class="sb-title">Live Stats</div>
+      <div class="stat-grid">
+        <div class="stat-box"><div class="stat-val blue"  id="sSite">0</div><div class="stat-label">Site m²</div></div>
+        <div class="stat-box"><div class="stat-val"       id="sBuild">0</div><div class="stat-label">Footprint m²</div></div>
+        <div class="stat-box"><div class="stat-val green" id="sGFA">0</div><div class="stat-label">GFA m²</div></div>
+        <div class="stat-box"><div class="stat-val"       id="sFAR">0.0</div><div class="stat-label">FAR</div></div>
+        <div class="stat-box"><div class="stat-val"       id="sBuildings">0</div><div class="stat-label">Buildings</div></div>
+        <div class="stat-box"><div class="stat-val"       id="sFloors">—</div><div class="stat-label">Max Floors</div></div>
+      </div>
+    </div>
+
+    <div class="sb-section">
+      <div class="sb-title">Layers</div>
+      <div class="layer-list">
+        <div class="layer-item active" id="lySite"  onclick="setTool('site')">
+          <div class="layer-dot" style="background:#1a6cff"></div>
+          <div class="layer-name">Site Boundary</div>
+          <div class="layer-count" id="lySitePts">0 pts</div>
+        </div>
+        <div class="layer-item" id="lyBuild" onclick="setTool('building')">
+          <div class="layer-dot" style="background:#00d4ff"></div>
+          <div class="layer-name">Buildings</div>
+          <div class="layer-count" id="lyBuildN">0</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="sb-section">
+      <div class="sb-title">Default Building</div>
+      <div class="ctrl-row"><span class="ctrl-label">Width (m)</span><span class="ctrl-val" id="dWL">20</span></div>
+      <input type="range" class="slider" id="dW" min="6" max="60" value="20" oninput="ud()"/>
+      <div class="ctrl-row" style="margin-top:10px"><span class="ctrl-label">Depth (m)</span><span class="ctrl-val" id="dDL">14</span></div>
+      <input type="range" class="slider" id="dD" min="6" max="40" value="14" oninput="ud()"/>
+      <div class="ctrl-row" style="margin-top:10px"><span class="ctrl-label">Floors</span><span class="ctrl-val" id="dFL">6</span></div>
+      <input type="range" class="slider" id="dF" min="1" max="30" value="6" oninput="ud()"/>
+    </div>
+
+    <div class="sb-section">
+      <div class="sb-title">Presets</div>
+      <div class="preset-list">
+        <button class="preset-btn" onclick="applyPreset(8,8,20)">Tower (8×8, 20f)</button>
+        <button class="preset-btn" onclick="applyPreset(25,12,8)">Slab (25×12, 8f)</button>
+        <button class="preset-btn" onclick="applyPreset(18,10,3)">Terrace (18×10, 3f)</button>
+        <button class="preset-btn" onclick="applyPreset(30,8,5)">Courtyard (30×8, 5f)</button>
+      </div>
+    </div>
+
+    <div class="hints">
+      <kbd class="kbd">Click</kbd> Draw / place<br/>
+      <kbd class="kbd">Dbl-click</kbd> Close site<br/>
+      <kbd class="kbd">V</kbd> Select &nbsp; <kbd class="kbd">B</kbd> Building<br/>
+      <kbd class="kbd">Delete</kbd> Remove selected<br/>
+      <kbd class="kbd">Scroll</kbd> Zoom &nbsp; <kbd class="kbd">Mid-drag</kbd> Pan
+    </div>
+  </div>
+
+  <div class="canvas-wrap" id="cwrap">
+    <canvas id="c2d"></canvas>
+    <div id="c3d"></div>
+    <div class="hint-bar" id="hintBar">Click to place site boundary — Double-click to close</div>
+    <div class="hud" id="hud">X: 0.0m &nbsp; Y: 0.0m</div>
+    <div class="compass">
+      <svg viewBox="0 0 26 26" fill="none">
+        <line x1="13" y1="3" x2="13" y2="23" stroke="rgba(232,237,245,0.2)" stroke-width="1"/>
+        <line x1="3" y1="13" x2="23" y2="13" stroke="rgba(232,237,245,0.2)" stroke-width="1"/>
+        <polygon points="13,3 10,13 13,11 16,13" fill="var(--blue)"/>
+        <polygon points="13,23 10,13 13,15 16,13" fill="rgba(232,237,245,0.25)"/>
+        <text x="13" y="2.5" text-anchor="middle" font-family="DM Mono" font-size="4.5" fill="var(--blue)" dominant-baseline="auto">N</text>
+      </svg>
+    </div>
+  </div>
+
+  <div class="rpanel">
+    <div class="rp-section">
+      <div class="rp-title">Properties</div>
+      <div id="propPanel"><div class="no-sel">Select a building to edit its properties.</div></div>
+    </div>
+    <div class="rp-section">
+      <div class="rp-title">Compliance</div>
+      <div class="prop-row"><span class="prop-l">Coverage</span><span class="prop-v" id="cCov">—</span></div>
+      <div class="prop-row"><span class="prop-l">FAR</span><span class="prop-v" id="cFAR">—</span></div>
+      <div class="prop-row"><span class="prop-l">Build %</span><span class="prop-v" id="cPct">—</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- Three.js for 3D view -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="js/shared.js"></script>
+<script src="js/editor.js"></script>
+</body>
+</html>
