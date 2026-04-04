@@ -153,8 +153,7 @@ function rerunBrief(id) {
     studio:   inp.counts?.studio || 4,
     two:      inp.counts?.two    || 8,
     three:    inp.counts?.three  || 4,
-    pent:     inp.counts?.pent   || 2,
-    fromEditor: '0'
+    pent:     inp.counts?.pent   || 2
   });
   window.location.href = 'designer.html?' + params.toString();
 }

@@ -2,10 +2,8 @@
    ArchForm — shared.css
    Design tokens, reset, and components used across all pages.
    Page-specific styles live in <style> blocks within each HTML.
+   Google Fonts are loaded via <link> in each page's <head>.
    ============================================================= */
-
-/* ── GOOGLE FONTS ─────────────────────────────────────────── */
-@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&family=DM+Mono:wght@400;500&display=swap');
 
 /* ── DESIGN TOKENS ────────────────────────────────────────── */
 :root {

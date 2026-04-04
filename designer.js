@@ -293,7 +293,7 @@ function saveProject() {
 /* ── IMPORT FROM EDITOR ───────────────────────────────────── */
 (function importFromEditor() {
   const p = new URLSearchParams(window.location.search);
-  if (!p.get('fromEditor')) return;
+  if (p.get('fromEditor') !== '1') return;
 
   document.getElementById('editorBanner').classList.add('show');
 
