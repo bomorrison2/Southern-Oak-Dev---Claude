@@ -124,6 +124,23 @@
     }
     .del-btn:hover { background: rgba(255,60,60,0.14); color: rgba(255,130,130,0.9); }
     .no-sel { padding: 16px; font-size: 11px; color: var(--text-dimmer); line-height: 1.65; text-align: center; }
+
+    /* ── PDF IMPORT SIDEBAR ───────────────────────────────── */
+    .pdf-import-btn {
+      width: 100%; padding: 8px 10px; border: 1px solid var(--line2);
+      background: rgba(26,108,255,0.06); color: var(--blue-light);
+      font-family: var(--mono); font-size: 9px; letter-spacing: 1px;
+      text-transform: uppercase; cursor: pointer; transition: all 0.15s; text-align: left;
+    }
+    .pdf-import-btn:hover { border-color: var(--blue); background: rgba(26,108,255,0.12); }
+    .pdf-status {
+      font-family: var(--mono); font-size: 9px; color: var(--text-dimmer);
+      letter-spacing: 0.5px; margin-top: 8px; line-height: 1.5;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .pdf-status.loaded     { color: var(--cyan); }
+    .pdf-status.calibrated { color: var(--green); }
+    .pdf-controls { display: none; flex-direction: column; gap: 6px; margin-top: 10px; }
   </style>
 </head>
 <body>
@@ -198,6 +215,37 @@
       </div>
     </div>
 
+    <div class="sb-section">
+      <div class="sb-title">Import Plan</div>
+      <!-- Hidden file input — triggered by button below -->
+      <input type="file" id="pdfFileInput" accept=".pdf" style="display:none"
+             onchange="loadPDF(this)"/>
+      <button class="pdf-import-btn"
+              onclick="document.getElementById('pdfFileInput').click()">
+        ⊕ Import PDF site plan
+      </button>
+      <div class="pdf-status" id="pdfStatus">No plan loaded</div>
+      <!-- Controls shown only when a PDF is loaded -->
+      <div class="pdf-controls" id="pdfControls">
+        <div class="ctrl-row">
+          <span class="ctrl-label">Opacity</span>
+          <span class="ctrl-val" id="pdfOpacityVal">35%</span>
+        </div>
+        <input type="range" class="slider" id="pdfOpacity"
+               min="5" max="100" value="35" oninput="setPdfOpacity(this.value)"/>
+        <button class="preset-btn" onclick="startCalibration()"
+                style="margin-top:4px">⊕ Calibrate scale</button>
+        <button class="preset-btn" onclick="clearPDF()"
+                style="border-color:rgba(255,80,80,0.2);color:rgba(255,100,100,0.6)">
+          ✕ Remove plan
+        </button>
+        <div style="font-family:var(--mono);font-size:8px;color:var(--text-dimmer);
+                    margin-top:4px;line-height:1.5">
+          Not saved with project
+        </div>
+      </div>
+    </div>
+
     <div class="hints">
       <kbd class="kbd">Click</kbd> Draw / place<br/>
       <kbd class="kbd">Dbl-click</kbd> Close site<br/>
@@ -239,6 +287,8 @@
 
 <div class="toast" id="toast"></div>
 
+<!-- pdf.js for site plan import -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <!-- Three.js for 3D view -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="shared.js"></script>

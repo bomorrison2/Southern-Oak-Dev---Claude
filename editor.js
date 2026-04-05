@@ -27,6 +27,15 @@ let nid        = 1;               // next building id
 let defW = 20, defD = 14, defF = 6;
 let defCol = COLS[0];
 
+/* ── PDF UNDERLAY STATE ───────────────────────────────────── */
+// null when no plan is loaded.
+// When loaded: { img, wx, wy, ww, wh, opacity }
+//   wx,wy = world coords of top-left corner (world Y increases upward)
+//   ww,wh = width/height in world metres
+let pdfState    = null;
+let calibPts    = [];    // accumulates up to 2 {wx,wy} world points
+let calibrating = false;
+
 /* ── CANVAS SETUP ─────────────────────────────────────────── */
 const canvas = document.getElementById('c2d');
 const ctx    = canvas.getContext('2d');
@@ -60,10 +69,20 @@ function setTool(t) {
   document.getElementById('lySite').classList.toggle('active',       t === 'site');
   document.getElementById('lyBuild').classList.toggle('active',      t === 'building');
   canvas.style.cursor = t === 'select' ? 'default' : 'crosshair';
+
+  // Calibration mode bookkeeping
+  if (t === 'calibrate') {
+    calibPts = [];
+  } else if (calibrating) {
+    calibrating = false;
+    calibPts    = [];
+  }
+
   const hints = {
-    site:     siteClosed ? 'Site closed — switch to Building tool' : 'Click to draw site boundary — Double-click to close',
-    building: 'Click to place a building',
-    select:   'Click to select — Drag to move'
+    site:      siteClosed ? 'Site closed — switch to Building tool' : 'Click to draw site boundary — Double-click to close',
+    building:  'Click to place a building',
+    select:    'Click to select — Drag to move',
+    calibrate: 'Click point 1 on the plan — then click point 2'
   };
   document.getElementById('hintBar').textContent = hints[t] || '';
 }
@@ -210,6 +229,19 @@ canvas.addEventListener('mouseup', e => {
 canvas.addEventListener('click', e => {
   if (dragging) return;
   const w2 = s2w(cp(e).x, cp(e).y);
+
+  // Calibration: capture two world points then compute scale
+  if (tool === 'calibrate') {
+    calibPts.push({ wx: w2.x, wy: w2.y });
+    render();
+    if (calibPts.length === 1) {
+      showToast('Point 1 set — click point 2');
+    } else {
+      finishCalibration();
+    }
+    return;
+  }
+
   if (tool === 'site' && !siteClosed) {
     sitePts.push({ x: w2.x, y: w2.y });
     updateStats(); render();
@@ -256,6 +288,38 @@ document.addEventListener('keydown', e => {
 /* ── 2D RENDER ────────────────────────────────────────────── */
 function render() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // ── PDF underlay — drawn first so all geometry sits on top ──
+  if (pdfState) {
+    const s  = w2s(pdfState.wx, pdfState.wy);  // top-left in screen coords
+    const sw = pdfState.ww * SCALE * zoom;
+    const sh = pdfState.wh * SCALE * zoom;
+    ctx.save();
+    ctx.globalAlpha = pdfState.opacity;
+    ctx.drawImage(pdfState.img, s.x, s.y, sw, sh);
+    ctx.globalAlpha = 1;
+    ctx.restore();
+
+    // Calibration point markers
+    calibPts.forEach((p, i) => {
+      const sp = w2s(p.wx, p.wy);
+      ctx.beginPath();
+      ctx.arc(sp.x, sp.y, 6, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(0,212,255,0.9)'; ctx.lineWidth = 2; ctx.stroke();
+      ctx.fillStyle   = 'rgba(0,212,255,0.25)'; ctx.fill();
+      ctx.font = '10px DM Mono'; ctx.fillStyle = 'rgba(0,212,255,0.9)';
+      ctx.textAlign = 'center'; ctx.fillText('P' + (i + 1), sp.x, sp.y - 10);
+    });
+
+    // Line between the two calibration points
+    if (calibPts.length === 2) {
+      const sp1 = w2s(calibPts[0].wx, calibPts[0].wy);
+      const sp2 = w2s(calibPts[1].wx, calibPts[1].wy);
+      ctx.beginPath(); ctx.moveTo(sp1.x, sp1.y); ctx.lineTo(sp2.x, sp2.y);
+      ctx.strokeStyle = 'rgba(0,212,255,0.5)'; ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 3]); ctx.stroke(); ctx.setLineDash([]);
+    }
+  }
 
   // Site boundary
   if (sitePts.length > 0) {
@@ -578,6 +642,153 @@ function sendToDesigner() {
     siteShape: payload.siteShape, fromEditor: '1'
   });
   window.location.href = 'designer.html?' + p.toString();
+}
+
+/* ── PDF IMPORT ───────────────────────────────────────────── */
+function loadPDF(input) {
+  const file = input.files[0];
+  if (!file) return;
+
+  // Graceful fallback if pdf.js CDN failed to load
+  if (typeof pdfjsLib === 'undefined') {
+    showToast('pdf.js not available — check network connection');
+    return;
+  }
+
+  const status = document.getElementById('pdfStatus');
+  status.textContent = 'Loading…';
+  status.className   = 'pdf-status';
+
+  const reader = new FileReader();
+  reader.onload = async (ev) => {
+    try {
+      pdfjsLib.GlobalWorkerOptions.workerSrc =
+        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+      const pdfDoc = await pdfjsLib.getDocument({ data: ev.target.result }).promise;
+      const page   = await pdfDoc.getPage(1);
+
+      // Render page at 2× scale for clarity
+      const viewport  = page.getViewport({ scale: 2.0 });
+      const offCanvas = document.createElement('canvas');
+      offCanvas.width  = viewport.width;
+      offCanvas.height = viewport.height;
+      await page.render({ canvasContext: offCanvas.getContext('2d'), viewport }).promise;
+
+      // Place PDF centred on current viewport, ~80% of viewport width
+      const viewWM = canvas.width  / (SCALE * zoom);
+      const viewHM = canvas.height / (SCALE * zoom);
+      const viewCX = (canvas.width  / 2 - panX) / (SCALE * zoom);
+      const viewCY = -((canvas.height / 2 - panY) / (SCALE * zoom));
+      const aspect = offCanvas.width / offCanvas.height;
+      const ww     = viewWM * 0.8;
+      const wh     = ww / aspect;
+
+      pdfState = {
+        img:     offCanvas,
+        wx:      viewCX - ww / 2,
+        wy:      viewCY + wh / 2,  // world Y of top-left (Y increases upward)
+        ww,
+        wh,
+        opacity: 0.35
+      };
+
+      calibPts = [];
+      status.textContent = file.name;
+      status.className   = 'pdf-status loaded';
+      document.getElementById('pdfControls').style.display = 'flex';
+      document.getElementById('pdfOpacity').value          = '35';
+      document.getElementById('pdfOpacityVal').textContent = '35%';
+      render();
+      showToast('Plan imported — use Calibrate to set scale');
+    } catch (err) {
+      status.textContent = 'Failed to load PDF';
+      status.className   = 'pdf-status';
+      showToast('Could not read PDF: ' + err.message);
+    }
+  };
+  reader.onerror = () => showToast('File read error');
+  reader.readAsArrayBuffer(file);
+
+  // Reset so the same file can be re-selected if needed
+  input.value = '';
+}
+
+function clearPDF() {
+  pdfState    = null;
+  calibPts    = [];
+  calibrating = false;
+  if (tool === 'calibrate') setTool('site');
+  document.getElementById('pdfStatus').textContent  = 'No plan loaded';
+  document.getElementById('pdfStatus').className    = 'pdf-status';
+  document.getElementById('pdfControls').style.display = 'none';
+  render();
+  showToast('Plan removed');
+}
+
+function setPdfOpacity(val) {
+  if (!pdfState) return;
+  pdfState.opacity = +val / 100;
+  document.getElementById('pdfOpacityVal').textContent = val + '%';
+  render();
+}
+
+/* ── CALIBRATION ──────────────────────────────────────────── */
+function startCalibration() {
+  if (!pdfState) return;
+  calibPts    = [];
+  calibrating = true;
+  setTool('calibrate');
+}
+
+function finishCalibration() {
+  const [p1, p2] = calibPts;
+  const dCurr = Math.sqrt((p2.wx - p1.wx) ** 2 + (p2.wy - p1.wy) ** 2);
+
+  if (dCurr < 0.001) {
+    showToast('Points too close — try again');
+    calibPts = [];
+    return;
+  }
+
+  const input = prompt(
+    'Real-world distance between these two points (metres):\n' +
+    '(Current display distance: ' + dCurr.toFixed(2) + 'm)'
+  );
+  const dReal = parseFloat(input);
+
+  if (!input || isNaN(dReal) || dReal <= 0) {
+    showToast('Calibration cancelled');
+    calibPts    = [];
+    calibrating = false;
+    setTool('site');
+    return;
+  }
+
+  const k = dReal / dCurr;
+
+  // Position of point 1 relative to PDF top-left (0–1 range)
+  const relX = (p1.wx - pdfState.wx) / pdfState.ww;
+  const relY = (pdfState.wy - p1.wy) / pdfState.wh;
+
+  // Rescale PDF
+  pdfState.ww *= k;
+  pdfState.wh *= k;
+
+  // Reposition so point 1 stays fixed at its world location
+  pdfState.wx = p1.wx - relX * pdfState.ww;
+  pdfState.wy = p1.wy + relY * pdfState.wh;
+
+  calibPts    = [];
+  calibrating = false;
+
+  const status = document.getElementById('pdfStatus');
+  status.textContent = 'Calibrated — ' + dReal + 'm ref';
+  status.className   = 'pdf-status calibrated';
+
+  setTool('site');
+  render();
+  showToast('Scale set: ' + dReal + 'm reference applied');
 }
 
 /* ── INIT ─────────────────────────────────────────────────── */
