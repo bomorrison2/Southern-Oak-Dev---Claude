@@ -791,6 +791,175 @@ function finishCalibration() {
   showToast('Scale set: ' + dReal + 'm reference applied');
 }
 
+/* ── DXF IMPORT ───────────────────────────────────────────── */
+
+/**
+ * Minimal ASCII DXF parser — supports LWPOLYLINE and legacy POLYLINE/VERTEX.
+ * Returns { vertices: [[x, y], ...], closed: bool } or null if nothing found.
+ * No external library required.
+ */
+function parseDXFPolyline(text) {
+  // Build code-value pairs from the flat line stream
+  const lines = text.split(/\r?\n/);
+  const pairs = [];
+  for (let i = 0; i + 1 < lines.length; i += 2) {
+    pairs.push([lines[i].trim(), lines[i + 1].trim()]);
+  }
+
+  // ── LWPOLYLINE (preferred, modern format) ───────────────────
+  for (let i = 0; i < pairs.length; i++) {
+    const [code, val] = pairs[i];
+    if (code !== '0' || val !== 'LWPOLYLINE') continue;
+
+    let vertices = [], closed = false, cx = null;
+    for (let j = i + 1; j < pairs.length; j++) {
+      const [c, v] = pairs[j];
+      if (c === '0') break;                          // next entity — stop
+      if (c === '70') closed = (parseInt(v) & 1) === 1;
+      if (c === '10') cx = parseFloat(v);
+      if (c === '20' && cx !== null) { vertices.push([cx, parseFloat(v)]); cx = null; }
+    }
+    if (vertices.length >= 3) return { vertices, closed };
+  }
+
+  // ── Legacy POLYLINE / VERTEX ─────────────────────────────────
+  for (let i = 0; i < pairs.length; i++) {
+    const [code, val] = pairs[i];
+    if (code !== '0' || val !== 'POLYLINE') continue;
+
+    // Read closed flag from POLYLINE header
+    let closed = false;
+    for (let j = i + 1; j < pairs.length; j++) {
+      const [c, v] = pairs[j];
+      if (c === '0') break;
+      if (c === '70') { closed = (parseInt(v) & 1) === 1; break; }
+    }
+
+    // Collect VERTEX entities until SEQEND
+    const vertices = [];
+    for (let j = i + 1; j < pairs.length; j++) {
+      const [c, v] = pairs[j];
+      if (c === '0' && v === 'SEQEND') break;
+      if (c === '0' && v === 'VERTEX') {
+        let vx = null, vy = null;
+        for (let k = j + 1; k < pairs.length; k++) {
+          const [vc, vv] = pairs[k];
+          if (vc === '0') break;
+          if (vc === '10') vx = parseFloat(vv);
+          if (vc === '20') vy = parseFloat(vv);
+        }
+        if (vx !== null && vy !== null) vertices.push([vx, vy]);
+      }
+    }
+    if (vertices.length >= 3) return { vertices, closed };
+  }
+
+  return null; // no usable polyline found
+}
+
+/**
+ * Check if the last vertex physically coincides with the first (tolerance 0.01m).
+ * Used to detect implicit closure when the DXF closed flag is 0.
+ */
+function isImplicitlyClosed(vertices) {
+  if (vertices.length < 3) return false;
+  const [x1, y1] = vertices[0];
+  const [xN, yN] = vertices[vertices.length - 1];
+  return Math.sqrt((xN - x1) ** 2 + (yN - y1) ** 2) < 0.01;
+}
+
+/**
+ * Zoom and pan so the imported boundary fills ~75% of the canvas.
+ * @param {Array<{x,y}>} pts  sitePts array (centroid-relative world metres)
+ */
+function fitViewToBoundary(pts) {
+  if (!pts.length) return;
+  const xs  = pts.map(p => p.x);
+  const ys  = pts.map(p => p.y);
+  const bbW = Math.max(...xs) - Math.min(...xs);
+  const bbH = Math.max(...ys) - Math.min(...ys);
+
+  // Choose zoom to fit bounding box at 75% of canvas dimension
+  const zX = (canvas.width  * 0.75) / ((bbW || 1) * SCALE);
+  const zY = (canvas.height * 0.75) / ((bbH || 1) * SCALE);
+  zoom = Math.max(0.15, Math.min(8, Math.min(zX, zY)));
+
+  // Centre pan on bounding box centroid
+  // (since coords are centroid-relative, the centroid ≈ 0,0 — pan to canvas centre)
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+  const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+  panX = canvas.width  / 2 - cx * SCALE * zoom;
+  panY = canvas.height / 2 + cy * SCALE * zoom;
+}
+
+function loadDXF(input) {
+  const file = input.files[0];
+  if (!file) return;
+
+  const status = document.getElementById('dxfStatus');
+  status.textContent = 'Reading…';
+  status.className   = 'pdf-status';
+
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    try {
+      const result = parseDXFPolyline(ev.target.result);
+
+      if (!result || result.vertices.length < 3) {
+        status.textContent = 'No valid polyline found';
+        status.className   = 'pdf-status';
+        showToast('DXF: no LWPOLYLINE or POLYLINE with 3+ vertices found');
+        return;
+      }
+
+      const { vertices, closed } = result;
+
+      // Subtract centroid so OSGB-scale coords map safely into editor world space.
+      // Area and edge lengths are translation-invariant — stats remain accurate.
+      const cx = vertices.reduce((s, v) => s + v[0], 0) / vertices.length;
+      const cy = vertices.reduce((s, v) => s + v[1], 0) / vertices.length;
+
+      sitePts    = vertices.map(([x, y]) => ({ x: x - cx, y: y - cy }));
+      siteClosed = closed || isImplicitlyClosed(vertices);
+
+      fitViewToBoundary(sitePts);
+      updateStats();
+      render();
+
+      const areaHa = (polyArea(sitePts) / 10000).toFixed(2);
+      const ptCount = vertices.length;
+      status.textContent = `${file.name}  ·  ${ptCount} pts  ·  ${areaHa} ha`;
+      status.className   = 'pdf-status calibrated'; // green
+      document.getElementById('dxfControls').style.display = 'flex';
+
+      if (!siteClosed) {
+        showToast(`DXF imported — boundary not closed, check geometry`);
+      } else {
+        showToast(`DXF loaded — ${ptCount} vertices, ${areaHa} ha`);
+      }
+    } catch (err) {
+      status.textContent = 'Failed to parse DXF';
+      status.className   = 'pdf-status';
+      showToast('DXF parse error: ' + err.message);
+    }
+  };
+
+  reader.onerror = () => showToast('File read error');
+  reader.readAsText(file);
+  input.value = ''; // allow re-selecting the same file
+}
+
+function clearDXFBoundary() {
+  sitePts    = [];
+  siteClosed = false;
+  document.getElementById('dxfStatus').textContent  = 'No boundary loaded';
+  document.getElementById('dxfStatus').className    = 'pdf-status';
+  document.getElementById('dxfControls').style.display = 'none';
+  updateStats();
+  render();
+  showToast('Boundary cleared');
+}
+
 /* ── INIT ─────────────────────────────────────────────────── */
 resize();
 ud();

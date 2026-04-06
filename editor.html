@@ -244,6 +244,26 @@
           Not saved with project
         </div>
       </div>
+
+      <!-- ── DXF boundary import ─────────────────────────── -->
+      <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)"></div>
+      <input type="file" id="dxfFileInput" accept=".dxf" style="display:none"
+             onchange="loadDXF(this)"/>
+      <button class="pdf-import-btn"
+              onclick="document.getElementById('dxfFileInput').click()">
+        ⊕ Import DXF boundary
+      </button>
+      <div class="pdf-status" id="dxfStatus">No boundary loaded</div>
+      <div class="pdf-controls" id="dxfControls">
+        <button class="preset-btn" onclick="clearDXFBoundary()"
+                style="border-color:rgba(255,80,80,0.2);color:rgba(255,100,100,0.6)">
+          ✕ Clear boundary
+        </button>
+        <div style="font-family:var(--mono);font-size:8px;color:var(--text-dimmer);
+                    margin-top:4px;line-height:1.5">
+          Coords centred on centroid
+        </div>
+      </div>
     </div>
 
     <div class="hints">
