@@ -13,7 +13,7 @@
     /* NAV */
     nav {
       height: 56px; display: flex; align-items: center; justify-content: space-between;
-      padding: 0 24px; background: rgba(10,13,18,0.97); border-bottom: 1px solid var(--line);
+      padding: 0 24px; background: rgba(45,45,45,0.97); border-bottom: 1px solid var(--line);
       flex-shrink: 0; z-index: 100; gap: 12px;
     }
     .nav-tools { display: flex; gap: 4px; }
@@ -89,16 +89,16 @@
     }
     #c2d { display: block; width: 100%; height: 100%; position: absolute; inset: 0; z-index: 1; }
     #c3d { display: none; width: 100%; height: 100%; position: absolute; inset: 0; z-index: 1; }
-    .hud { position: absolute; bottom: 16px; left: 16px; font-family: var(--mono); font-size: 9px; color: var(--text-dimmer); letter-spacing: 1px; z-index: 10; background: rgba(10,13,18,0.7); padding: 4px 8px; }
+    .hud { position: absolute; bottom: 16px; left: 16px; font-family: var(--mono); font-size: 9px; color: var(--text-dimmer); letter-spacing: 1px; z-index: 10; background: rgba(45,45,45,0.85); padding: 4px 8px; }
     .hint-bar {
       position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
       font-family: var(--mono); font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase;
-      color: var(--cyan); background: rgba(10,13,18,0.88); padding: 5px 14px;
+      color: var(--cyan); background: rgba(45,45,45,0.92); padding: 5px 14px;
       border: 1px solid rgba(0,212,255,0.2); z-index: 10; pointer-events: none; white-space: nowrap;
     }
     .compass {
       position: absolute; bottom: 16px; right: 16px; width: 44px; height: 44px;
-      border: 1px solid var(--line2); background: rgba(10,13,18,0.8); display: flex;
+      border: 1px solid var(--line2); background: rgba(45,45,45,0.9); display: flex;
       align-items: center; justify-content: center; z-index: 10;
     }
     .compass svg { width: 26px; height: 26px; }
@@ -309,6 +309,14 @@
 
 <!-- pdf.js for site plan import -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+  /* Set pdf.js worker immediately after library loads — must happen
+     before any getDocument() call, not inside an async handler. */
+  if (typeof pdfjsLib !== 'undefined') {
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  }
+</script>
 <!-- Three.js for 3D view -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="shared.js"></script>

@@ -7,19 +7,19 @@
 
 /* ── DESIGN TOKENS ────────────────────────────────────────── */
 :root {
-  --bg:          #0a0d12;
-  --bg2:         #0e1218;
-  --bg3:         #131820;
-  --bg4:         #1a2030;
-  --blue:        #1a6cff;
-  --blue-light:  #4d8fff;
+  --bg:          #3d3d3d;
+  --bg2:         #474747;
+  --bg3:         #505050;
+  --bg4:         #5a5a5a;
+  --blue:        #4d8fff;
+  --blue-light:  #7aaeff;
   --cyan:        #00d4ff;
   --green:       #00e87a;
-  --line:        rgba(255, 255, 255, 0.07);
-  --line2:       rgba(26, 108, 255, 0.2);
-  --text:        #e8edf5;
-  --text-dim:    rgba(232, 237, 245, 0.55);
-  --text-dimmer: rgba(232, 237, 245, 0.25);
+  --line:        rgba(255, 255, 255, 0.12);
+  --line2:       rgba(77, 143, 255, 0.3);
+  --text:        #f0f0f0;
+  --text-dim:    rgba(240, 240, 240, 0.65);
+  --text-dimmer: rgba(240, 240, 240, 0.38);
   --mono:        'DM Mono', monospace;
   --display:     'Bebas Neue', sans-serif;
   --body:        'DM Sans', sans-serif;
@@ -59,7 +59,7 @@ body {
     linear-gradient(var(--line2) 1px, transparent 1px),
     linear-gradient(90deg, var(--line2) 1px, transparent 1px);
   background-size: 40px 40px, 40px 40px, 200px 200px, 200px 200px;
-  opacity: 0.6;
+  opacity: 0.35;
 }
 
 /* Simpler single-weight grid used on app pages (editor, designer) */

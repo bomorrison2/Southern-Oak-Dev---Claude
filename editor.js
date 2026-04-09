@@ -468,7 +468,7 @@ function build3d() {
   if (!r3) {
     r3 = new THREE.WebGLRenderer({ antialias: true });
     r3.setPixelRatio(devicePixelRatio);
-    r3.setClearColor(0x0a0d12, 1);
+    r3.setClearColor(0x3d3d3d, 1);
     wrap.appendChild(r3.domElement);
     cam3 = new THREE.PerspectiveCamera(45, w / h, 0.1, 5000);
 
@@ -500,8 +500,8 @@ function build3d() {
   cam3.updateProjectionMatrix();
 
   s3 = new THREE.Scene();
-  s3.fog = new THREE.Fog(0x0a0d12, 400, 900);
-  s3.add(new THREE.GridHelper(500, 50, 0x1a2030, 0x111620));
+  s3.fog = new THREE.Fog(0x3d3d3d, 400, 900);
+  s3.add(new THREE.GridHelper(500, 50, 0x4a4a4a, 0x3d3d3d));
   s3.add(new THREE.AmbientLight(0xffffff, 0.45));
   const sun = new THREE.DirectionalLight(0x6699ff, 0.85);
   sun.position.set(100, 200, 80);
@@ -519,7 +519,7 @@ function build3d() {
     for (let i = 1; i < sitePts.length; i++) shape.lineTo(sitePts[i].x - cx, sitePts[i].y - cz);
     shape.closePath();
     const geo = new THREE.ShapeGeometry(shape);
-    const mat = new THREE.MeshLambertMaterial({ color: 0x141c28, side: THREE.DoubleSide });
+    const mat = new THREE.MeshLambertMaterial({ color: 0x424242, side: THREE.DoubleSide });
     const m   = new THREE.Mesh(geo, mat);
     m.rotation.x = -Math.PI / 2;
     m.position.y = 0.1;
@@ -662,9 +662,6 @@ function loadPDF(input) {
   const reader = new FileReader();
   reader.onload = async (ev) => {
     try {
-      pdfjsLib.GlobalWorkerOptions.workerSrc =
-        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-
       const pdfDoc = await pdfjsLib.getDocument({ data: ev.target.result }).promise;
       const page   = await pdfDoc.getPage(1);
 
@@ -800,7 +797,8 @@ function finishCalibration() {
  */
 function parseDXFPolyline(text) {
   // Build code-value pairs from the flat line stream
-  const lines = text.split(/\r?\n/);
+  // Normalise line endings — strip \r so Windows CRLF never misaligns pairs
+  const lines = text.replace(/\r/g, '').split('\n');
   const pairs = [];
   for (let i = 0; i + 1 < lines.length; i += 2) {
     pairs.push([lines[i].trim(), lines[i + 1].trim()]);
