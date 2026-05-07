@@ -201,6 +201,10 @@
 <nav>
   <a href="index.html" class="nav-logo"><div class="logo-mark"></div>ARCHFORM</a>
   <div class="nav-tag">AI Design Tool — Beta</div>
+  <div style="display:flex;align-items:center;gap:8px;margin-left:auto;">
+    <div id="apiKeyStatus" class="pdf-status" style="margin:0;white-space:nowrap">Checking key…</div>
+    <button id="apiKeyBtn" class="btn-s ghost" onclick="promptForApiKey()" style="white-space:nowrap">Set API key</button>
+  </div>
   <a href="projects.html" class="nav-link-ghost">My Projects</a>
 </nav>
 

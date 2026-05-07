@@ -4,13 +4,54 @@
    output rendering, save, and import from editor.
    Depends on: shared.js
 
-   NOTE: The Claude API call has no key in the source.
-   This prototype is intended to run inside Claude.ai, which
-   injects authentication automatically. Running this file
-   outside Claude.ai will result in a 401 Unauthorized error.
+   API KEY: stored in localStorage under 'archformApiKey'.
+   First run prompts the user. Key is never sent anywhere except
+   directly to api.anthropic.com/v1/messages.
    ============================================================= */
 
 'use strict';
+
+/* ── API KEY ──────────────────────────────────────────────── */
+const API_KEY_STORAGE = 'archformApiKey';
+
+function getApiKey() {
+  return localStorage.getItem(API_KEY_STORAGE) || '';
+}
+
+function promptForApiKey() {
+  const current = getApiKey();
+  const key = prompt(
+    'Enter your Anthropic API key.\n' +
+    'Stored in browser localStorage only — sent directly to api.anthropic.com.\n\n' +
+    (current ? 'Current key: ' + current.slice(0, 14) + '…  (leave blank to keep it)' :
+               'Get a key at console.anthropic.com'),
+    ''
+  );
+  if (key !== null && key.trim().startsWith('sk-')) {
+    localStorage.setItem(API_KEY_STORAGE, key.trim());
+    updateKeyStatus();
+    return key.trim();
+  } else if (key !== null && key.trim() !== '') {
+    alert('That does not look like a valid Anthropic API key (should start with sk-).');
+  }
+  return current;
+}
+
+function updateKeyStatus() {
+  const el  = document.getElementById('apiKeyStatus');
+  const btn = document.getElementById('apiKeyBtn');
+  if (!el || !btn) return;
+  const key = getApiKey();
+  if (key) {
+    el.textContent = 'Key set: ' + key.slice(0, 14) + '…';
+    el.className   = 'pdf-status calibrated';
+    btn.textContent = 'Change key';
+  } else {
+    el.textContent = 'No API key — click to set';
+    el.className   = 'pdf-status';
+    btn.textContent = 'Set API key';
+  }
+}
 
 /* ── UNIT COUNTS ──────────────────────────────────────────── */
 const counts = { studio: 4, two: 8, three: 4, pent: 2 };
@@ -155,9 +196,29 @@ Return ONLY valid JSON (no markdown, no backticks) with this exact structure:
 }`;
 
   try {
+    // Ensure we have an API key — prompt if not
+    let apiKey = getApiKey();
+    if (!apiKey) {
+      apiKey = promptForApiKey();
+      if (!apiKey) {
+        stopSteps();
+        setState('empty');
+        err.textContent = 'No API key set. Click "Set API key" in the nav to add one.';
+        err.classList.add('active');
+        btn.disabled = false;
+        btn.classList.remove('loading');
+        return;
+      }
+    }
+
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
       body: JSON.stringify({
         model:      'claude-sonnet-4-20250514',
         max_tokens: 1000,
@@ -330,3 +391,6 @@ function saveProject() {
     addEl.value = `Site area ${siteArea}m² · FAR ${far} · ${floors} floors max — imported from Site Editor`;
   }
 })();
+
+// Refresh key status display on load
+updateKeyStatus();
