@@ -269,12 +269,11 @@ The static prototype lives in the `prototype-static/` folder. It requires no bui
 
 ### Quick start (recommended)
 
-```
-cd prototype-static
-python3 -m http.server 8080
+```powershell
+.\start-preview.ps1
 ```
 
-Then open [http://localhost:8080](http://localhost:8080) in your browser.
+Then open [http://localhost:3003](http://localhost:3003) in your browser.
 
 ### Why use a server rather than opening files directly?
 
@@ -284,10 +283,10 @@ The editor-to-designer handoff uses `sessionStorage`, and the projects dashboard
 
 | Page | URL | Description |
 |---|---|---|
-| Landing | `http://localhost:8080/index.html` | Marketing landing page with links to all tools |
-| Site Editor | `http://localhost:8080/editor.html` | Interactive 2D/3D site boundary and building editor |
-| AI Brief | `http://localhost:8080/designer.html` | AI-powered design brief generator (requires Claude.ai context) |
-| My Projects | `http://localhost:8080/projects.html` | Saved projects dashboard using localStorage |
+| Landing | `http://localhost:3003/index.html` | Marketing landing page with links to all tools |
+| Site Editor | `http://localhost:3003/editor.html` | Interactive 2D/3D site boundary and building editor |
+| AI Brief | `http://localhost:3003/designer.html` | AI-powered design brief generator (requires Claude.ai context) |
+| My Projects | `http://localhost:3003/projects.html` | Saved projects dashboard using localStorage |
 
 ### Notes on the AI brief generator
 
