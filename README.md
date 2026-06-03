@@ -265,15 +265,15 @@ When in doubt:
 
 ## Running the Prototype
 
-The static prototype lives at the root of this repository. It requires no build step, no Node.js, and no dependencies beyond a modern browser.
+The static prototype lives in the `prototype-static/` folder. It requires no build step, no Node.js, and no dependencies beyond a modern browser.
 
 ### Quick start (recommended)
 
-```
-python3 -m http.server 8080
+```powershell
+.\start-preview.ps1
 ```
 
-Then open [http://localhost:8080](http://localhost:8080) in your browser.
+Then open [http://localhost:3003](http://localhost:3003) in your browser.
 
 ### Why use a server rather than opening files directly?
 
@@ -283,10 +283,10 @@ The editor-to-designer handoff uses `sessionStorage`, and the projects dashboard
 
 | Page | URL | Description |
 |---|---|---|
-| Landing | `http://localhost:8080/index.html` | Marketing landing page with links to all tools |
-| Site Editor | `http://localhost:8080/editor.html` | Interactive 2D/3D site boundary and building editor |
-| AI Brief | `http://localhost:8080/designer.html` | AI-powered design brief generator (requires Claude.ai context) |
-| My Projects | `http://localhost:8080/projects.html` | Saved projects dashboard using localStorage |
+| Landing | `http://localhost:3003/index.html` | Marketing landing page with links to all tools |
+| Site Editor | `http://localhost:3003/editor.html` | Interactive 2D/3D site boundary and building editor |
+| AI Brief | `http://localhost:3003/designer.html` | AI-powered design brief generator (requires Claude.ai context) |
+| My Projects | `http://localhost:3003/projects.html` | Saved projects dashboard using localStorage |
 
 ### Notes on the AI brief generator
 
@@ -297,14 +297,18 @@ The `designer.html` page calls the Anthropic API (`/v1/messages`) without an API
 ### File structure
 
 ```
-/
+prototype-static/
   index.html        — landing page
   editor.html       — site editor
   designer.html     — AI brief generator
   projects.html     — saved projects dashboard
-  shared.css        — design tokens, reset, shared components
-  shared.js         — toast, localStorage helpers, sessionStorage helpers
-  editor.js         — all 2D/3D canvas logic, tools, save, export
-  designer.js       — form handling, Claude API call, output rendering
-  projects.js       — grid, filter, modal, delete, re-run, load in editor
+  css/
+    shared.css      — design tokens, reset, shared components
+  js/
+    shared.js       — toast, localStorage helpers, sessionStorage helpers
+    editor.js       — all 2D/3D canvas logic, tools, save, export
+    designer.js     — form handling, Claude API call, output rendering
+    projects.js     — grid, filter, modal, delete, re-run, load in editor
+  assets/
+    .gitkeep        — placeholder for future static assets
 ```
