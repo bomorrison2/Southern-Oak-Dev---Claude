@@ -26,6 +26,7 @@ let mw         = { x: 0, y: 0 }; // mouse world coords
 let nid        = 1;               // next building id
 let defW = 20, defD = 14, defF = 6;
 let defCol = COLS[0];
+let dwellingCount = 45;
 
 /* ── PDF UNDERLAY STATE ───────────────────────────────────── */
 // null when no plan is loaded.
@@ -445,7 +446,110 @@ function render() {
   });
 }
 
+/* ── DWELLING SLIDER ──────────────────────────────────────── */
+function onDwellingSlider() {
+  dwellingCount = +document.getElementById('dwellingSlider').value;
+  document.getElementById('dwellingCountLabel').textContent = dwellingCount;
+  if (view === '3d') build3d();
+}
+
 /* ── 3D VIEW ──────────────────────────────────────────────── */
+/* ── DWELLING MASSING HELPERS ─────────────────────────────── */
+
+// Returns a BufferGeometry triangular prism for a pitched roof.
+// Origin is at ground level (0,0,0); eave at y=eave, ridge at y=eave+rise.
+// Width runs along X, depth along Z.
+function makePitchedRoof(w, d, eave, rise) {
+  const hw = w / 2, hd = d / 2, ry = eave + rise;
+  // 10 triangles: left slope (2), right slope (2), front gable (1), back gable (1)
+  const pos = new Float32Array([
+    // Left slope
+    -hw, eave, -hd,   0, ry, -hd,    0, ry,  hd,
+    -hw, eave, -hd,   0, ry,  hd,  -hw, eave,  hd,
+    // Right slope
+     hw, eave, -hd,   hw, eave,  hd,   0, ry,  hd,
+     hw, eave, -hd,    0, ry,  hd,    0, ry, -hd,
+    // Front gable (z = -hd)
+    -hw, eave, -hd,   hw, eave, -hd,   0, ry, -hd,
+    // Back gable (z = +hd)
+    -hw, eave,  hd,    0, ry,  hd,   hw, eave,  hd,
+  ]);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.computeVertexNormals();
+  return geo;
+}
+
+// Lays out simple dwelling massing inside the site boundary.
+// Houses are 8×10m footprint, 6m to eaves, pitched roof (+2m ridge).
+// Rows mix terraced (touching) and detached (3m gaps).
+// sitePts are centroid-relative world coords; cx/cz are the Three.js centroid offsets.
+function buildDwellingMassing(scene, sitePts, cx, cz, count) {
+  if (!sitePts || sitePts.length < 3) return;
+
+  const xs = sitePts.map(p => p.x);
+  const ys = sitePts.map(p => p.y);
+  const INSET = 4;
+  const xMin = Math.min(...xs) + INSET, xMax = Math.max(...xs) - INSET;
+  const yMin = Math.min(...ys) + INSET, yMax = Math.max(...ys) - INSET;
+  if (xMax - xMin < 8 || yMax - yMin < 10) return;
+
+  const DW = 8, DD = 10, EAVE = 6, RISE = 2;
+  const ROW_STEP = 20; // centre-to-centre row spacing (house depth + front+back gardens)
+
+  const WALL_COLS = [0xc4a882, 0xb89474, 0xcfb99a, 0xbcaa8c];
+  const ROOF_COL  = 0x6e6458;
+
+  const roofGeo = makePitchedRoof(DW, DD, EAVE, RISE);
+  const roofMat = new THREE.MeshLambertMaterial({ color: ROOF_COL, side: THREE.DoubleSide });
+  const bodyGeo = new THREE.BoxGeometry(DW, EAVE, DD);
+
+  // Ray-casting point-in-polygon in world (site) coords
+  function inSite(px, py) {
+    let inside = false;
+    for (let i = 0, j = sitePts.length - 1; i < sitePts.length; j = i++) {
+      const xi = sitePts[i].x, yi = sitePts[i].y;
+      const xj = sitePts[j].x, yj = sitePts[j].y;
+      if (((yi > py) !== (yj > py)) && px < (xj - xi) * (py - yi) / (yj - yi) + xi) {
+        inside = !inside;
+      }
+    }
+    return inside;
+  }
+
+  let placed = 0, rowIdx = 0;
+
+  for (let sy = yMin + DD / 2; sy <= yMax - DD / 2 && placed < count; sy += ROW_STEP) {
+    // Pattern: terrace, terrace, detached — repeating
+    const isTerrace = (rowIdx % 3 !== 2);
+    const unitStep  = isTerrace ? DW : DW + 3;
+    const wallMat   = new THREE.MeshLambertMaterial({ color: WALL_COLS[rowIdx % WALL_COLS.length] });
+
+    for (let sx = xMin + DW / 2; sx <= xMax - DW / 2 && placed < count; sx += unitStep) {
+      if (!inSite(sx, sy)) continue;
+
+      // Convert site world coords → Three.js scene coords
+      const tx = sx - cx;
+      const tz = -(sy - cz);
+
+      const body = new THREE.Mesh(bodyGeo, wallMat);
+      body.position.set(tx, EAVE / 2, tz);
+      body.castShadow    = true;
+      body.receiveShadow = true;
+      scene.add(body);
+
+      const roof = new THREE.Mesh(roofGeo, roofMat);
+      roof.position.set(tx, 0, tz);
+      roof.castShadow    = true;
+      roof.receiveShadow = true;
+      scene.add(roof);
+
+      placed++;
+    }
+    rowIdx++;
+  }
+}
+
 let r3, s3, cam3, anim3;
 let theta = 45, phi = 40, radius = 200;
 
@@ -469,6 +573,7 @@ function build3d() {
     r3 = new THREE.WebGLRenderer({ antialias: true });
     r3.setPixelRatio(devicePixelRatio);
     r3.setClearColor(0x3d3d3d, 1);
+    r3.shadowMap.enabled = true;
     wrap.appendChild(r3.domElement);
     cam3 = new THREE.PerspectiveCamera(45, w / h, 0.1, 5000);
 
@@ -505,6 +610,9 @@ function build3d() {
   s3.add(new THREE.AmbientLight(0xffffff, 0.45));
   const sun = new THREE.DirectionalLight(0x6699ff, 0.85);
   sun.position.set(100, 200, 80);
+  sun.castShadow = true;
+  sun.shadow.mapSize.width  = 2048;
+  sun.shadow.mapSize.height = 2048;
   s3.add(sun);
   const fill = new THREE.PointLight(0x00d4ff, 0.25, 600);
   fill.position.set(-80, 60, -80);
@@ -553,6 +661,8 @@ function build3d() {
       s3.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: b.color, transparent: true, opacity: 0.12 })));
     }
   });
+
+  buildDwellingMassing(s3, sitePts, cx, cz, dwellingCount);
 
   if (anim3) cancelAnimationFrame(anim3);
   function loop() { anim3 = requestAnimationFrame(loop); r3.render(s3, cam3); }

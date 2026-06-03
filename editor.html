@@ -216,6 +216,16 @@
     </div>
 
     <div class="sb-section">
+      <div class="sb-title">Dwellings <span style="font-size:8px;opacity:0.45;letter-spacing:0">(3D view)</span></div>
+      <div class="ctrl-row">
+        <span class="ctrl-label">Target count</span>
+        <span class="ctrl-val" id="dwellingCountLabel">45</span>
+      </div>
+      <input type="range" class="slider" id="dwellingSlider"
+             min="30" max="60" value="45" oninput="onDwellingSlider()"/>
+    </div>
+
+    <div class="sb-section">
       <div class="sb-title">Import Plan</div>
       <!-- Hidden file input — triggered by button below -->
       <input type="file" id="pdfFileInput" accept=".pdf" style="display:none"
