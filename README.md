@@ -265,12 +265,11 @@ When in doubt:
 
 ## Running the Prototype
 
-The static prototype lives in the `prototype-static/` folder. It requires no build step, no Node.js, and no dependencies beyond a modern browser.
+The static prototype lives at the root of this repository. It requires no build step, no Node.js, and no dependencies beyond a modern browser.
 
 ### Quick start (recommended)
 
 ```
-cd prototype-static
 python3 -m http.server 8080
 ```
 
@@ -298,18 +297,14 @@ The `designer.html` page calls the Anthropic API (`/v1/messages`) without an API
 ### File structure
 
 ```
-prototype-static/
+/
   index.html        — landing page
   editor.html       — site editor
   designer.html     — AI brief generator
   projects.html     — saved projects dashboard
-  css/
-    shared.css      — design tokens, reset, shared components
-  js/
-    shared.js       — toast, localStorage helpers, sessionStorage helpers
-    editor.js       — all 2D/3D canvas logic, tools, save, export
-    designer.js     — form handling, Claude API call, output rendering
-    projects.js     — grid, filter, modal, delete, re-run, load in editor
-  assets/
-    .gitkeep        — placeholder for future static assets
+  shared.css        — design tokens, reset, shared components
+  shared.js         — toast, localStorage helpers, sessionStorage helpers
+  editor.js         — all 2D/3D canvas logic, tools, save, export
+  designer.js       — form handling, Claude API call, output rendering
+  projects.js       — grid, filter, modal, delete, re-run, load in editor
 ```
