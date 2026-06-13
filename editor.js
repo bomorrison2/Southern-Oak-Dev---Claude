@@ -27,6 +27,14 @@ let nid        = 1;               // next building id
 let defW = 20, defD = 14, defF = 6;
 let defCol = COLS[0];
 let dwellingCount = 45;
+let placedDwellings = 0; // actual dwellings placed inside the boundary (3D massing)
+
+/* ── SITE ACCESS POINT ────────────────────────────────────── */
+// accessPt: {x,y} in centroid-relative world coords (same space as sitePts), or null.
+// First step toward a road layout — entrance marker only, no road generation yet.
+let accessPt        = null;
+let movingEntrance  = false; // true while waiting for a click to reposition the entrance
+const ENTRANCE_COL  = '#ff8c00'; // amber — reads clearly against the blue boundary
 
 /* ── PDF UNDERLAY STATE ───────────────────────────────────── */
 // null when no plan is loaded.
@@ -36,6 +44,9 @@ let dwellingCount = 45;
 let pdfState    = null;
 let calibPts    = [];    // accumulates up to 2 {wx,wy} world points
 let calibrating = false;
+// OSGB centroid {e,n} subtracted from the DXF boundary at import. Kept so a
+// georeferenced PDF underlay can be aligned to the boundary's OSGB frame.
+let dxfOrigin   = null;
 
 /* ── CANVAS SETUP ─────────────────────────────────────────── */
 const canvas = document.getElementById('c2d');
@@ -120,6 +131,54 @@ function polyArea(pts) {
   return Math.abs(a / 2);
 }
 
+/* ── SITE ACCESS POINT HELPERS ────────────────────────────── */
+
+// Default the entrance to the southernmost vertex (lowest world Y) of the
+// current boundary. Derived dynamically from sitePts — no hardcoded location.
+function setDefaultAccessPoint() {
+  if (!siteClosed || sitePts.length < 3) { accessPt = null; return; }
+  const south = sitePts.reduce((m, p) => (p.y < m.y ? p : m), sitePts[0]);
+  accessPt = { x: south.x, y: south.y };
+}
+
+// Project (wx,wy) onto the nearest point of the closed boundary's edges so the
+// entrance always sits ON the boundary line, never floating inside or outside.
+function nearestPointOnBoundary(wx, wy) {
+  if (sitePts.length < 2) return { x: wx, y: wy };
+  let best = null, bestD = Infinity;
+  for (let i = 0; i < sitePts.length; i++) {
+    const a = sitePts[i], b = sitePts[(i + 1) % sitePts.length];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len2 = dx * dx + dy * dy;
+    let t = len2 > 0 ? ((wx - a.x) * dx + (wy - a.y) * dy) / len2 : 0;
+    t = Math.max(0, Math.min(1, t));            // clamp to the segment
+    const px = a.x + t * dx, py = a.y + t * dy;
+    const d  = (wx - px) ** 2 + (wy - py) ** 2;
+    if (d < bestD) { bestD = d; best = { x: px, y: py }; }
+  }
+  return best;
+}
+
+// Enter "move entrance" mode. Placement happens in 2D, so drop to 2D view first.
+function toggleMoveEntrance() {
+  if (!siteClosed || sitePts.length < 3) return;
+  if (view === '3d') setView('2d');
+  movingEntrance = true;
+  canvas.style.cursor = 'crosshair';
+  document.getElementById('hintBar').textContent = 'Click on the boundary to place the entrance';
+  refreshEntranceUI();
+}
+
+// Show the Move-entrance control only when a boundary exists; reflect active state.
+function refreshEntranceUI() {
+  const ctrls = document.getElementById('entranceControls');
+  const btn   = document.getElementById('entranceMoveBtn');
+  if (!ctrls || !btn) return;
+  const hasBoundary = siteClosed && sitePts.length >= 3;
+  ctrls.style.display = hasBoundary ? 'flex' : 'none';
+  btn.classList.toggle('active', movingEntrance);
+}
+
 /* ── STATS ────────────────────────────────────────────────── */
 function updateStats() {
   const sA  = siteClosed && sitePts.length >= 3 ? polyArea(sitePts) : 0;
@@ -139,6 +198,15 @@ function updateStats() {
   document.getElementById('cCov').textContent      = sA > 0 ? ((bA / sA) * 100).toFixed(1) + '%' : '—';
   document.getElementById('cFAR').textContent      = far;
   document.getElementById('cPct').textContent      = sA > 0 ? ((bA / sA) * 100).toFixed(0) + '%' : '—';
+
+  // ── Dwelling capacity (3D massing) — reuses the site area sA above ──
+  const ha   = sA > 0 ? sA / 10000 : 0;
+  const dens = (ha > 0 && placedDwellings > 0) ? placedDwellings / ha : 0;
+  document.getElementById('sSiteHa').textContent    = ha > 0 ? ha.toFixed(2) : '0.00';
+  document.getElementById('sDwellings').textContent = placedDwellings;
+  document.getElementById('sDensity').textContent   = dens > 0 ? dens.toFixed(1) : '0';
+
+  refreshEntranceUI();
 }
 
 /* ── PROPERTIES PANEL ─────────────────────────────────────── */
@@ -231,6 +299,18 @@ canvas.addEventListener('click', e => {
   if (dragging) return;
   const w2 = s2w(cp(e).x, cp(e).y);
 
+  // Move entrance: snap to the nearest point on the boundary edge, then exit mode
+  if (movingEntrance) {
+    accessPt       = nearestPointOnBoundary(w2.x, w2.y);
+    movingEntrance = false;
+    canvas.style.cursor = tool === 'select' ? 'default' : 'crosshair';
+    document.getElementById('hintBar').textContent = 'Entrance placed on boundary';
+    refreshEntranceUI();
+    render();
+    showToast('Entrance moved');
+    return;
+  }
+
   // Calibration: capture two world points then compute scale
   if (tool === 'calibrate') {
     calibPts.push({ wx: w2.x, wy: w2.y });
@@ -259,6 +339,7 @@ canvas.addEventListener('click', e => {
 canvas.addEventListener('dblclick', e => {
   if (tool === 'site' && sitePts.length >= 3 && !siteClosed) {
     siteClosed = true;
+    setDefaultAccessPoint();
     setTool('site');
     document.getElementById('hintBar').textContent = 'Site boundary closed — switch to Building tool';
     updateStats(); render();
@@ -279,6 +360,21 @@ canvas.addEventListener('wheel', e => {
 }, { passive: false });
 
 document.addEventListener('keydown', e => {
+  // Nudge the PDF underlay with arrow keys (1m, Shift = 5m). 2D only, and only
+  // when nothing has focus so the sliders keep their native arrow behaviour.
+  if (pdfState && view === '2d' && document.activeElement === document.body &&
+      ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
+    const step = e.shiftKey ? 5 : 1;
+    if (e.key === 'ArrowLeft')  pdfState.wx -= step;
+    if (e.key === 'ArrowRight') pdfState.wx += step;
+    if (e.key === 'ArrowUp')    pdfState.wy += step; // world Y increases upward
+    if (e.key === 'ArrowDown')  pdfState.wy -= step;
+    pdfState.georef = null; // manual fine-tune wins — a later DXF import won't snap back
+    e.preventDefault();
+    render();
+    return;
+  }
+
   if ((e.key === 'Delete' || e.key === 'Backspace') && selected && document.activeElement === document.body) delSel();
   if (e.key === 'Escape') { selected = null; updateProps(); render(); }
   if (e.key === 'b') setTool('building');
@@ -373,6 +469,31 @@ function render() {
         ctx.restore();
       }
     }
+  }
+
+  // Site access point (entrance) marker — sits on the boundary line
+  if (accessPt && siteClosed) {
+    const sp = w2s(accessPt.x, accessPt.y);
+    ctx.save();
+    // Amber filled triangle (gateway marker)
+    const r = 8;
+    ctx.beginPath();
+    ctx.moveTo(sp.x,         sp.y - r);
+    ctx.lineTo(sp.x - r * 0.9, sp.y + r * 0.7);
+    ctx.lineTo(sp.x + r * 0.9, sp.y + r * 0.7);
+    ctx.closePath();
+    ctx.fillStyle   = ENTRANCE_COL;
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth   = 1.5;
+    ctx.stroke();
+    // Label
+    ctx.font         = '11px DM Mono';
+    ctx.fillStyle    = ENTRANCE_COL;
+    ctx.textAlign    = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Entrance', sp.x + r + 4, sp.y);
+    ctx.restore();
   }
 
   // Ghost building preview when in building mode
@@ -482,27 +603,26 @@ function makePitchedRoof(w, d, eave, rise) {
 
 // Lays out simple dwelling massing inside the site boundary.
 // Houses are 8×10m footprint, 6m to eaves, pitched roof (+2m ridge).
-// Rows mix terraced (touching) and detached (3m gaps).
+// Rows mix terraced (joined on the short side) and detached (gaps).
+// Every footprint is fully contained in the boundary (all four corners tested),
+// candidates are gathered across the whole site, then evenly thinned to the
+// target count so they spread across the entire developable area.
 // sitePts are centroid-relative world coords; cx/cz are the Three.js centroid offsets.
 function buildDwellingMassing(scene, sitePts, cx, cz, count) {
-  if (!sitePts || sitePts.length < 3) return;
+  placedDwellings = 0; // reset; stays 0 on any early return (no/invalid boundary)
+  if (!sitePts || sitePts.length < 3 || !siteClosed) return;
+
+  // ── Fixed domestic proportions ──
+  const DW = 8, DD = 10, EAVE = 6, RISE = 2; // 8×10m footprint, 6m to eaves
+  const GAP = 3;        // side gap between detached units
+  const INSET = 8;      // keep all geometry clear of the boundary line
+  const ROW_STEP = 20;  // row centre-to-centre (house depth + front/back gardens)
 
   const xs = sitePts.map(p => p.x);
   const ys = sitePts.map(p => p.y);
-  const INSET = 4;
   const xMin = Math.min(...xs) + INSET, xMax = Math.max(...xs) - INSET;
   const yMin = Math.min(...ys) + INSET, yMax = Math.max(...ys) - INSET;
-  if (xMax - xMin < 8 || yMax - yMin < 10) return;
-
-  const DW = 8, DD = 10, EAVE = 6, RISE = 2;
-  const ROW_STEP = 20; // centre-to-centre row spacing (house depth + front+back gardens)
-
-  const WALL_COLS = [0xc4a882, 0xb89474, 0xcfb99a, 0xbcaa8c];
-  const ROOF_COL  = 0x6e6458;
-
-  const roofGeo = makePitchedRoof(DW, DD, EAVE, RISE);
-  const roofMat = new THREE.MeshLambertMaterial({ color: ROOF_COL, side: THREE.DoubleSide });
-  const bodyGeo = new THREE.BoxGeometry(DW, EAVE, DD);
+  if (xMax - xMin < DW || yMax - yMin < DD) return;
 
   // Ray-casting point-in-polygon in world (site) coords
   function inSite(px, py) {
@@ -517,41 +637,108 @@ function buildDwellingMassing(scene, sitePts, cx, cz, count) {
     return inside;
   }
 
-  let placed = 0, rowIdx = 0;
+  // A footprint is valid only if all four corners sit inside the boundary
+  function footprintInside(px, py) {
+    const hw = DW / 2, hd = DD / 2;
+    return inSite(px - hw, py - hd) && inSite(px + hw, py - hd) &&
+           inSite(px + hw, py + hd) && inSite(px - hw, py + hd);
+  }
 
-  for (let sy = yMin + DD / 2; sy <= yMax - DD / 2 && placed < count; sy += ROW_STEP) {
+  // ── Gather candidate slots across the ENTIRE boundary extent ──
+  const candidates = [];
+  let rowIdx = 0;
+  for (let sy = yMin + DD / 2; sy <= yMax - DD / 2; sy += ROW_STEP) {
     // Pattern: terrace, terrace, detached — repeating
     const isTerrace = (rowIdx % 3 !== 2);
-    const unitStep  = isTerrace ? DW : DW + 3;
-    const wallMat   = new THREE.MeshLambertMaterial({ color: WALL_COLS[rowIdx % WALL_COLS.length] });
-
-    for (let sx = xMin + DW / 2; sx <= xMax - DW / 2 && placed < count; sx += unitStep) {
-      if (!inSite(sx, sy)) continue;
-
-      // Convert site world coords → Three.js scene coords
-      const tx = sx - cx;
-      const tz = -(sy - cz);
-
-      const body = new THREE.Mesh(bodyGeo, wallMat);
-      body.position.set(tx, EAVE / 2, tz);
-      body.castShadow    = true;
-      body.receiveShadow = true;
-      scene.add(body);
-
-      const roof = new THREE.Mesh(roofGeo, roofMat);
-      roof.position.set(tx, 0, tz);
-      roof.castShadow    = true;
-      roof.receiveShadow = true;
-      scene.add(roof);
-
-      placed++;
+    const unitStep  = isTerrace ? DW : DW + GAP;
+    for (let sx = xMin + DW / 2; sx <= xMax - DW / 2; sx += unitStep) {
+      if (footprintInside(sx, sy)) candidates.push({ sx, sy, rowIdx });
     }
     rowIdx++;
   }
+
+  // ── Choose up to `count`, spread evenly across the whole site ──
+  const target = Math.min(count, candidates.length);
+  let chosen;
+  if (candidates.length <= target) {
+    chosen = candidates;
+  } else {
+    chosen = [];
+    const stride = candidates.length / target;
+    for (let i = 0; i < target; i++) chosen.push(candidates[Math.floor(i * stride)]);
+  }
+
+  // ── Shared geometry / materials ──
+  const WALL_COLS = [0xc4a882, 0xb89474, 0xcfb99a, 0xbcaa8c];
+  const ROOF_COL  = 0x6e6458;
+  const roofGeo  = makePitchedRoof(DW, DD, EAVE, RISE);
+  const roofMat  = new THREE.MeshLambertMaterial({ color: ROOF_COL, side: THREE.DoubleSide });
+  const bodyGeo  = new THREE.BoxGeometry(DW, EAVE, DD);
+  const wallMats = WALL_COLS.map(c => new THREE.MeshLambertMaterial({ color: c }));
+
+  chosen.forEach(c => {
+    // Convert site world coords → Three.js scene coords
+    const tx = c.sx - cx;
+    const tz = -(c.sy - cz);
+    const wallMat = wallMats[c.rowIdx % wallMats.length];
+
+    const body = new THREE.Mesh(bodyGeo, wallMat);
+    body.position.set(tx, EAVE / 2, tz);
+    body.castShadow    = true;
+    body.receiveShadow = true;
+    scene.add(body);
+
+    const roof = new THREE.Mesh(roofGeo, roofMat);
+    roof.position.set(tx, 0, tz);
+    roof.castShadow    = true;
+    roof.receiveShadow = true;
+    scene.add(roof);
+  });
+
+  // Live count reflects what was actually placed inside the boundary
+  placedDwellings = chosen.length;
+  const lbl = document.getElementById('dwellingCountLabel');
+  if (lbl) lbl.textContent = chosen.length;
+}
+
+// Adds the entrance marker to the 3D scene: a vertical amber post + flag, with
+// a canvas-texture "Entrance" sprite label (self-contained — no font loader).
+function addEntrance3d(scene, cx, cz) {
+  if (!accessPt || !siteClosed) return;
+  const tx = accessPt.x - cx;
+  const tz = -(accessPt.y - cz);
+  const POST_H = 6;
+
+  const mat  = new THREE.MeshLambertMaterial({ color: 0xff8c00 });
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, POST_H, 8), mat);
+  post.position.set(tx, POST_H / 2, tz);
+  post.castShadow = true;
+  scene.add(post);
+
+  const flag = new THREE.Mesh(new THREE.BoxGeometry(3, 1.6, 0.2), mat);
+  flag.position.set(tx + 1.5, POST_H - 1, tz);
+  flag.castShadow = true;
+  scene.add(flag);
+
+  // "Entrance" label as a sprite (billboards toward the camera)
+  const cv = document.createElement('canvas');
+  cv.width = 256; cv.height = 64;
+  const g = cv.getContext('2d');
+  g.font = 'bold 34px DM Mono, monospace';
+  g.fillStyle = '#ff8c00';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillText('Entrance', 128, 32);
+  const tex = new THREE.CanvasTexture(cv);
+  const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true }));
+  spr.scale.set(12, 3, 1);
+  spr.position.set(tx, POST_H + 3, tz);
+  scene.add(spr);
 }
 
 let r3, s3, cam3, anim3;
 let theta = 45, phi = 40, radius = 200;
+let target3 = { x: 0, y: 0, z: 0 }; // camera look-at target — moved by panning
 
 function setView(v) {
   view = v;
@@ -560,6 +747,8 @@ function setView(v) {
   canvas.style.display = v === '2d' ? 'block' : 'none';
   const c3 = document.getElementById('c3d');
   c3.style.display = v === '3d' ? 'block' : 'none';
+  const h3 = document.getElementById('hint3d');
+  if (h3) h3.style.display = v === '3d' ? 'block' : 'none';
   if (v === '3d') build3d();
   else if (anim3) { cancelAnimationFrame(anim3); anim3 = null; }
 }
@@ -577,27 +766,53 @@ function build3d() {
     wrap.appendChild(r3.domElement);
     cam3 = new THREE.PerspectiveCamera(45, w / h, 0.1, 5000);
 
+    // Camera = look-at target + spherical offset; orbit rotates around target3.
     function updCam() {
       const tr = theta * Math.PI / 180, pr = phi * Math.PI / 180;
-      cam3.position.set(Math.sin(tr) * Math.cos(pr) * radius, Math.sin(pr) * radius, Math.cos(tr) * Math.cos(pr) * radius);
-      cam3.lookAt(0, 0, 0);
+      cam3.position.set(
+        target3.x + Math.sin(tr) * Math.cos(pr) * radius,
+        target3.y + Math.sin(pr) * radius,
+        target3.z + Math.cos(tr) * Math.cos(pr) * radius
+      );
+      cam3.lookAt(target3.x, target3.y, target3.z);
     }
     updCam();
 
-    let od = false, os = { x: 0, y: 0 };
-    r3.domElement.addEventListener('mousedown', e => { od = true; os = { x: e.clientX, y: e.clientY }; });
+    // Drag: right-button or Shift+left pans the target; plain left orbits.
+    let od = false, mode = 'orbit', os = { x: 0, y: 0 };
+    r3.domElement.addEventListener('mousedown', e => {
+      od = true;
+      mode = (e.button === 2 || e.shiftKey) ? 'pan' : 'orbit';
+      os = { x: e.clientX, y: e.clientY };
+    });
     window.addEventListener('mouseup', () => od = false);
     window.addEventListener('mousemove', e => {
       if (!od) return;
-      theta -= (e.clientX - os.x) * 0.4;
-      phi = Math.max(5, Math.min(85, phi - (e.clientY - os.y) * 0.4));
+      const dx = e.clientX - os.x, dy = e.clientY - os.y;
+      if (mode === 'pan') {
+        // Grab-pan across the ground plane; 1:1 with the cursor at this zoom.
+        const tr  = theta * Math.PI / 180;
+        const hPx = r3.domElement.clientHeight || 1;
+        const wpp = 2 * radius * Math.tan((cam3.fov * Math.PI / 180) / 2) / hPx;
+        const rX = Math.cos(tr),  rZ = -Math.sin(tr); // screen-right on the ground
+        const fX = -Math.sin(tr), fZ = -Math.cos(tr); // ground-forward (into screen)
+        target3.x += (-rX * dx - fX * dy) * wpp;
+        target3.z += (-rZ * dx - fZ * dy) * wpp;
+      } else {
+        theta -= dx * 0.4;
+        phi = Math.max(5, Math.min(85, phi - dy * 0.4));
+      }
       os = { x: e.clientX, y: e.clientY };
       updCam();
     });
+    // Suppress the browser context menu so right-drag can pan.
+    r3.domElement.addEventListener('contextmenu', e => e.preventDefault());
+    // Plain scroll and Ctrl+scroll both zoom; preventDefault stops page zoom/scroll.
     r3.domElement.addEventListener('wheel', e => {
+      e.preventDefault();
       radius = Math.max(20, Math.min(700, radius + e.deltaY * 0.5));
       updCam();
-    });
+    }, { passive: false });
   }
 
   r3.setSize(w, h);
@@ -663,6 +878,8 @@ function build3d() {
   });
 
   buildDwellingMassing(s3, sitePts, cx, cz, dwellingCount);
+  addEntrance3d(s3, cx, cz);
+  updateStats(); // reflect placed dwelling count + density in the stats panel
 
   if (anim3) cancelAnimationFrame(anim3);
   function loop() { anim3 = requestAnimationFrame(loop); r3.render(s3, cam3); }
@@ -673,6 +890,8 @@ function build3d() {
 function clearAll() {
   if (!confirm('Clear everything?')) return;
   sitePts = []; siteClosed = false; buildings = []; selected = null;
+  placedDwellings = 0;
+  accessPt = null; movingEntrance = false;
   updateStats(); render(); updateProps(); setTool('site');
 }
 
@@ -706,7 +925,7 @@ function saveEditorProject() {
     created:     new Date().toISOString(),
     type:        'editor',
     stats:       { gfa, buildings: buildings.length, siteArea: sA, floors: buildings.length ? Math.max(...buildings.map(b => b.floors)) : 0 },
-    editorState: { sitePts, siteClosed, buildings, defW, defD, defF }
+    editorState: { sitePts, siteClosed, buildings, defW, defD, defF, accessPt }
   });
   showToast('Project saved!');
 }
@@ -754,6 +973,77 @@ function sendToDesigner() {
   window.location.href = 'designer.html?' + p.toString();
 }
 
+/* ── PDF AUTO-GEOREFERENCING (OSGB grid labels) ───────────── */
+
+// Scans page-1 vector text for OSGB grid coordinate labels (e.g. "558500.000")
+// and derives the page's real-world frame: metres per rendered-canvas pixel in
+// x/y plus the OSGB easting/northing at the canvas's left/top edges.
+// Returns { E0, N0, mppX, mppY } or null if no usable grid is found.
+async function extractOsgbGeoref(page, viewport) {
+  const tc = await page.getTextContent();
+  const eastings = [], northings = []; // {p: canvas px, v: OSGB value}
+
+  tc.items.forEach(it => {
+    const str = (it.str || '').trim();
+    if (!/^\d{6}\.\d{3}$/.test(str)) return;
+    const v = parseFloat(str);
+    // Use the label's CENTRE, not its anchor — anchors sit offset from the
+    // gridline they mark, which biased the fit by a constant few metres.
+    // Half-width along the text run direction, half-height perpendicular;
+    // for unrotated labels this is exactly (x + width/2, y + height/2).
+    const [a, b, c, d, e, f] = it.transform;
+    const lx  = Math.hypot(a, b) || 1;
+    const ly  = Math.hypot(c, d) || 1;
+    const cxU = e + (a / lx) * (it.width / 2) + (c / ly) * (it.height / 2);
+    const cyU = f + (b / lx) * (it.width / 2) + (d / ly) * (it.height / 2);
+    // convertToViewportPoint applies the 2.0 render scale and the PDF y-flip,
+    // giving offscreen-canvas pixel coords (origin top-left, y down).
+    const [vx, vy] = viewport.convertToViewportPoint(cxU, cyU);
+    if      (v >= 400000 && v < 700000) eastings.push({ p: vx, v });  // ~558xxx → E
+    else if (v >= 1      && v < 200000) northings.push({ p: vy, v }); // ~106xxx → N
+  });
+
+  // Least-squares fit v = m·p + c along one axis; null without spread.
+  function fit(pts) {
+    if (pts.length < 2) return null;
+    const n  = pts.length;
+    const pm = pts.reduce((s, q) => s + q.p, 0) / n;
+    const vm = pts.reduce((s, q) => s + q.v, 0) / n;
+    let num = 0, den = 0;
+    pts.forEach(q => { num += (q.p - pm) * (q.v - vm); den += (q.p - pm) ** 2; });
+    if (den < 1) return null; // labels all at (nearly) the same position
+    const m = num / den;
+    return { m, c: vm - m * pm };
+  }
+
+  const fx = fit(eastings);
+  const fy = fit(northings);
+  if (!fx || !fy) return null;
+
+  const mppX = fx.m, mppY = fy.m;
+  // Sanity: north-up plan (E grows right, N shrinks down the canvas),
+  // plausible survey scale, roughly square pixels.
+  if (!isFinite(mppX) || !isFinite(mppY)) return null;
+  if (mppX <= 0 || mppY >= 0) return null;
+  if (mppX < 0.001 || mppX > 10) return null;
+  if (Math.abs(mppY) < 0.001 || Math.abs(mppY) > 10) return null;
+  if (Math.abs(mppX / Math.abs(mppY) - 1) > 0.1) return null;
+
+  return { E0: fx.c, N0: fy.c, mppX, mppY };
+}
+
+// Re-position a georeferenced PDF underlay so its OSGB frame coincides with
+// the DXF boundary's (editor world coords = OSGB minus dxfOrigin).
+function alignPdfToDxf() {
+  if (!pdfState || !pdfState.georef || !dxfOrigin) return;
+  const g = pdfState.georef;
+  pdfState.ww = pdfState.img.width  * g.mppX;
+  pdfState.wh = pdfState.img.height * Math.abs(g.mppY);
+  pdfState.wx = g.E0 - dxfOrigin.e; // world x of the canvas's left edge
+  pdfState.wy = g.N0 - dxfOrigin.n; // world y of the top edge (canvas y = 0)
+  render();
+}
+
 /* ── PDF IMPORT ───────────────────────────────────────────── */
 function loadPDF(input) {
   const file = input.files[0];
@@ -782,32 +1072,49 @@ function loadPDF(input) {
       offCanvas.height = viewport.height;
       await page.render({ canvasContext: offCanvas.getContext('2d'), viewport }).promise;
 
-      // Place PDF centred on current viewport, ~80% of viewport width
-      const viewWM = canvas.width  / (SCALE * zoom);
-      const viewHM = canvas.height / (SCALE * zoom);
+      // Try automatic georeferencing from printed OSGB grid labels
+      let georef = null;
+      try { georef = await extractOsgbGeoref(page, viewport); } catch (e) { georef = null; }
+
       const viewCX = (canvas.width  / 2 - panX) / (SCALE * zoom);
       const viewCY = -((canvas.height / 2 - panY) / (SCALE * zoom));
-      const aspect = offCanvas.width / offCanvas.height;
-      const ww     = viewWM * 0.8;
-      const wh     = ww / aspect;
 
-      pdfState = {
-        img:     offCanvas,
-        wx:      viewCX - ww / 2,
-        wy:      viewCY + wh / 2,  // world Y of top-left (Y increases upward)
-        ww,
-        wh,
-        opacity: 0.35
-      };
+      if (georef) {
+        // True size from the grid scale; align to DXF frame if one is loaded,
+        // otherwise centre on viewport (re-aligned later by alignPdfToDxf).
+        const ww = offCanvas.width  * georef.mppX;
+        const wh = offCanvas.height * Math.abs(georef.mppY);
+        const wx = dxfOrigin ? georef.E0 - dxfOrigin.e : viewCX - ww / 2;
+        const wy = dxfOrigin ? georef.N0 - dxfOrigin.n : viewCY + wh / 2;
+        pdfState = { img: offCanvas, wx, wy, ww, wh, opacity: 0.35, georef };
+        status.textContent = 'Auto-georeferenced ✓ (OSGB grid)';
+        status.className   = 'pdf-status calibrated';
+        showToast(dxfOrigin ? 'Plan georeferenced and aligned to DXF boundary'
+                            : 'Plan auto-georeferenced from OSGB grid');
+      } else {
+        // No grid text — place centred at ~80% viewport width, manual Calibrate available
+        const viewWM = canvas.width / (SCALE * zoom);
+        const aspect = offCanvas.width / offCanvas.height;
+        const ww     = viewWM * 0.8;
+        const wh     = ww / aspect;
+        pdfState = {
+          img:     offCanvas,
+          wx:      viewCX - ww / 2,
+          wy:      viewCY + wh / 2,  // world Y of top-left (Y increases upward)
+          ww,
+          wh,
+          opacity: 0.35
+        };
+        status.textContent = 'No grid found — use Calibrate Scale';
+        status.className   = 'pdf-status loaded';
+        showToast('Plan imported — use Calibrate to set scale');
+      }
 
       calibPts = [];
-      status.textContent = file.name;
-      status.className   = 'pdf-status loaded';
       document.getElementById('pdfControls').style.display = 'flex';
       document.getElementById('pdfOpacity').value          = '35';
       document.getElementById('pdfOpacityVal').textContent = '35%';
       render();
-      showToast('Plan imported — use Calibrate to set scale');
     } catch (err) {
       status.textContent = 'Failed to load PDF';
       status.className   = 'pdf-status';
@@ -885,6 +1192,10 @@ function finishCalibration() {
   // Reposition so point 1 stays fixed at its world location
   pdfState.wx = p1.wx - relX * pdfState.ww;
   pdfState.wy = p1.wy + relY * pdfState.wh;
+
+  // Manual calibration overrides auto-georeferencing for good — drop the
+  // georef so a later DXF import can't snap the plan back.
+  pdfState.georef = null;
 
   calibPts    = [];
   calibrating = false;
@@ -1029,10 +1340,14 @@ function loadDXF(input) {
 
       sitePts    = vertices.map(([x, y]) => ({ x: x - cx, y: y - cy }));
       siteClosed = closed || isImplicitlyClosed(vertices);
+      dxfOrigin  = { e: cx, n: cy }; // OSGB centroid — lets a georeferenced PDF align to this frame
 
+      setDefaultAccessPoint(); // entrance defaults to the new southern tip
       fitViewToBoundary(sitePts);
       updateStats();
       render();
+      if (view === '3d') build3d(); // refresh 3D so it tracks the imported boundary
+      alignPdfToDxf();              // snap an already-georeferenced PDF under the boundary
 
       const areaHa = (polyArea(sitePts) / 10000).toFixed(2);
       const ptCount = vertices.length;
@@ -1060,11 +1375,15 @@ function loadDXF(input) {
 function clearDXFBoundary() {
   sitePts    = [];
   siteClosed = false;
+  placedDwellings = 0;
+  accessPt = null; movingEntrance = false;
+  dxfOrigin = null;
   document.getElementById('dxfStatus').textContent  = 'No boundary loaded';
   document.getElementById('dxfStatus').className    = 'pdf-status';
   document.getElementById('dxfControls').style.display = 'none';
   updateStats();
   render();
+  if (view === '3d') build3d(); // refresh 3D so the cleared boundary is reflected
   showToast('Boundary cleared');
 }
 
@@ -1085,6 +1404,8 @@ if (new URLSearchParams(window.location.search).get('load')) {
     defD = saved.defD || 14;
     defF = saved.defF || 6;
     nid  = buildings.length ? Math.max(...buildings.map(b => b.id)) + 1 : 1;
+    accessPt = saved.accessPt || null;
+    if (!accessPt && siteClosed && sitePts.length >= 3) setDefaultAccessPoint();
     document.getElementById('dW').value = defW;
     document.getElementById('dD').value = defD;
     document.getElementById('dF').value = defF;
@@ -1094,8 +1415,10 @@ if (new URLSearchParams(window.location.search).get('load')) {
 } else {
   // Load a demo site on first open
   setTimeout(() => {
+    if (siteClosed || sitePts.length) return; // don't overwrite a boundary loaded before this fires
     sitePts    = [{ x: -35, y: -25 }, { x: 35, y: -25 }, { x: 35, y: 25 }, { x: -35, y: 25 }];
     siteClosed = true;
+    setDefaultAccessPoint();
     document.getElementById('hintBar').textContent = 'Demo site loaded — use Building tool to place blocks';
     updateStats(); render();
     showToast('Demo site loaded — try placing some buildings!');

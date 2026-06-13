@@ -77,6 +77,7 @@
       text-transform: uppercase; cursor: pointer; transition: all 0.15s; text-align: left;
     }
     .preset-btn:hover { border-color: var(--blue); color: var(--blue-light); }
+    .preset-btn.active { background: rgba(255,140,0,0.14); border-color: #ff8c00; color: #ffae4d; }
     .hints { padding: 14px 18px; font-size: 10px; color: var(--text-dimmer); line-height: 1.9; }
     .kbd { display: inline-block; padding: 1px 5px; background: var(--bg4); border: 1px solid var(--line); font-family: var(--mono); font-size: 8px; color: var(--text-dim); }
 
@@ -170,7 +171,13 @@
     <div class="sb-section">
       <div class="sb-title">Live Stats</div>
       <div class="stat-grid">
+        <div class="stat-box" style="grid-column:1/-1;text-align:center;border:1px solid var(--line2);background:rgba(0,232,122,0.06)">
+          <div class="stat-val green" id="sDensity" style="font-size:30px">0</div>
+          <div class="stat-label">Dwellings / ha · SHELAA</div>
+        </div>
         <div class="stat-box"><div class="stat-val blue"  id="sSite">0</div><div class="stat-label">Site m²</div></div>
+        <div class="stat-box"><div class="stat-val"       id="sSiteHa">0.00</div><div class="stat-label">Site ha</div></div>
+        <div class="stat-box"><div class="stat-val green" id="sDwellings">0</div><div class="stat-label">Dwellings</div></div>
         <div class="stat-box"><div class="stat-val"       id="sBuild">0</div><div class="stat-label">Footprint m²</div></div>
         <div class="stat-box"><div class="stat-val green" id="sGFA">0</div><div class="stat-label">GFA m²</div></div>
         <div class="stat-box"><div class="stat-val"       id="sFAR">0.0</div><div class="stat-label">FAR</div></div>
@@ -251,6 +258,10 @@
         </button>
         <div style="font-family:var(--mono);font-size:8px;color:var(--text-dimmer);
                     margin-top:4px;line-height:1.5">
+          Arrow keys nudge plan · Shift = 5m
+        </div>
+        <div style="font-family:var(--mono);font-size:8px;color:var(--text-dimmer);
+                    margin-top:4px;line-height:1.5">
           Not saved with project
         </div>
       </div>
@@ -274,6 +285,20 @@
           Coords centred on centroid
         </div>
       </div>
+
+      <!-- ── Site access point ───────────────────────────── -->
+      <!-- Shown only when a boundary exists (toggled by refreshEntranceUI) -->
+      <div class="pdf-controls" id="entranceControls"
+           style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
+        <button class="preset-btn" id="entranceMoveBtn" onclick="toggleMoveEntrance()"
+                style="border-color:rgba(255,140,0,0.35);color:#ffae4d">
+          ⌖ Move entrance
+        </button>
+        <div style="font-family:var(--mono);font-size:8px;color:var(--text-dimmer);
+                    margin-top:4px;line-height:1.5">
+          Click the boundary to reposition · placed in 2D
+        </div>
+      </div>
     </div>
 
     <div class="hints">
@@ -290,6 +315,8 @@
     <div id="c3d"></div>
     <div class="hint-bar" id="hintBar">Click to place site boundary — Double-click to close</div>
     <div class="hud" id="hud">X: 0.0m &nbsp; Y: 0.0m</div>
+    <!-- 3D navigation hint — shown only in 3D view (toggled by setView) -->
+    <div class="hud" id="hint3d" style="display:none;bottom:auto;left:auto;top:12px;right:12px">Drag orbit · Right-drag pan · Scroll zoom</div>
     <div class="compass">
       <svg viewBox="0 0 26 26" fill="none">
         <line x1="13" y1="3" x2="13" y2="23" stroke="rgba(232,237,245,0.2)" stroke-width="1"/>
