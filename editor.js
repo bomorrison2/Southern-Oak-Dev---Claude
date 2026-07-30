@@ -28,6 +28,7 @@ let defW = 20, defD = 14, defF = 6;
 let defCol = COLS[0];
 let dwellingCount = 45;
 let placedDwellings = 0; // actual dwellings placed inside the boundary (3D massing)
+let deductPct = 25;      // SuDS / open-space % of gross (roads measured separately from geometry)
 
 /* ── SITE ACCESS POINT ────────────────────────────────────── */
 // accessPt: {x,y} in centroid-relative world coords (same space as sitePts), or null.
@@ -35,6 +36,34 @@ let placedDwellings = 0; // actual dwellings placed inside the boundary (3D mass
 let accessPt        = null;
 let movingEntrance  = false; // true while waiting for a click to reposition the entrance
 const ENTRANCE_COL  = '#ff8c00'; // amber — reads clearly against the blue boundary
+// Confirmed Sayerland Lane access, absolute OSGB36 (WGS84 50°50'19.84"N
+// 0°15'17.31"E → BGS OSTN15). Projected onto the boundary at runtime once a DXF
+// gives us the OSGB frame (dxfOrigin); without that frame we use the south tip.
+const ACCESS_OSGB   = { e: 558859.18, n: 106790.66 };
+// Visibility splay / access stub run into the site from the entrance (metres).
+let accessSplay     = { length: 20, halfWidth: 8 };
+
+/* ── INTERNAL ESTATE ROAD ─────────────────────────────────── */
+// Centreline polyline drawn from the access stub into the site. `pts` holds the
+// user-placed vertices AFTER the stub start (the stub end is always prepended,
+// so the road stays snapped to the access). width = carriageway width (metres).
+let road        = { pts: [], width: 5 };
+let drawingRoad = false; // true while laying out the polyline (click to add, dbl-click/Esc to finish)
+const ROAD_COL  = '#6b6b6b'; // carriageway grey
+
+/* ── TEMP: ACCESS DIAGNOSTIC (one-off, read-only — safe to delete this block,
+   the render-overlay hook, and the two runAccessDiagnostic() calls) ───────── */
+const DIAG_ACCESS = false;  // flip to true to re-enable the one-off console diagnostic
+let diagPin     = null;     // surveyed ACCESS_OSGB in editor coords (overlay marker)
+let diagNearest = null;     // nearest boundary point to the pin (connector line)
+
+/* ── SITE UTILITY MARKERS ─────────────────────────────────── */
+// Surveyed service positions in centroid-relative world coords (same space as
+// sitePts), or null. Reuses the entrance marker's snapping + persistence.
+let utilities     = { sewer: null, water: null, elec: null };
+let movingUtility = null; // null | 'sewer' | 'water' | 'elec'
+const UTIL_COLS   = { sewer: '#8a5a2b', water: '#2196f3', elec: '#ffd400' };
+const UTIL_LABELS = { sewer: 'SEWER',   water: 'WATER',   elec: 'ELEC' };
 
 /* ── PDF UNDERLAY STATE ───────────────────────────────────── */
 // null when no plan is loaded.
@@ -133,12 +162,20 @@ function polyArea(pts) {
 
 /* ── SITE ACCESS POINT HELPERS ────────────────────────────── */
 
-// Default the entrance to the southernmost vertex (lowest world Y) of the
-// current boundary. Derived dynamically from sitePts — no hardcoded location.
+// Default the entrance to the confirmed Sayerland Lane access.
+// With an OSGB frame (DXF imported → dxfOrigin set) we convert the surveyed
+// ACCESS_OSGB pin into editor coords and project it onto the nearest boundary
+// point — so it always lands on the line even though the pin itself lies just
+// off this title boundary. Without a frame (demo / hand-drawn site) we fall
+// back to the southernmost vertex.
 function setDefaultAccessPoint() {
   if (!siteClosed || sitePts.length < 3) { accessPt = null; return; }
-  const south = sitePts.reduce((m, p) => (p.y < m.y ? p : m), sitePts[0]);
-  accessPt = { x: south.x, y: south.y };
+  if (dxfOrigin) {
+    accessPt = nearestPointOnBoundary(ACCESS_OSGB.e - dxfOrigin.e, ACCESS_OSGB.n - dxfOrigin.n);
+  } else {
+    const south = sitePts.reduce((m, p) => (p.y < m.y ? p : m), sitePts[0]);
+    accessPt = { x: south.x, y: south.y };
+  }
 }
 
 // Project (wx,wy) onto the nearest point of the closed boundary's edges so the
@@ -179,6 +216,405 @@ function refreshEntranceUI() {
   btn.classList.toggle('active', movingEntrance);
 }
 
+// For a point lying on the boundary, find the edge it sits on and return the
+// UNIT INWARD normal (nx,ny) plus the unit tangent (dhx,dhy) of that edge.
+// Inward is resolved against the polygon centroid, so winding order is irrelevant.
+function boundaryEdgeAt(pt) {
+  if (sitePts.length < 2) return null;
+  let best = null, bestD = Infinity;
+  for (let i = 0; i < sitePts.length; i++) {
+    const a = sitePts[i], b = sitePts[(i + 1) % sitePts.length];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len2 = dx * dx + dy * dy;
+    let t = len2 > 0 ? ((pt.x - a.x) * dx + (pt.y - a.y) * dy) / len2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    const px = a.x + t * dx, py = a.y + t * dy;
+    const d = (pt.x - px) ** 2 + (pt.y - py) ** 2;
+    if (d < bestD) { bestD = d; best = { dx, dy, len2 }; }
+  }
+  if (!best || best.len2 === 0) return null;            // degenerate edge — skip
+  const len = Math.sqrt(best.len2);
+  let nx = -best.dy / len, ny = best.dx / len;
+  const cx = sitePts.reduce((s, p) => s + p.x, 0) / sitePts.length;
+  const cy = sitePts.reduce((s, p) => s + p.y, 0) / sitePts.length;
+  if (nx * (cx - pt.x) + ny * (cy - pt.y) < 0) { nx = -nx; ny = -ny; } // face inward
+  return { nx, ny, dhx: best.dx / len, dhy: best.dy / len };
+}
+
+// 2D access stub / visibility splay: a translucent amber triangle opening from
+// the entrance mouth on the boundary and tapering inward, plus a centre line.
+function drawAccessStub() {
+  if (!accessPt || !siteClosed) return;
+  const e = boundaryEdgeAt(accessPt);
+  if (!e) return;
+  const L = accessSplay.length, HW = accessSplay.halfWidth;
+  const mL  = w2s(accessPt.x - e.dhx * HW, accessPt.y - e.dhy * HW);
+  const mR  = w2s(accessPt.x + e.dhx * HW, accessPt.y + e.dhy * HW);
+  const end = w2s(accessPt.x + e.nx * L,   accessPt.y + e.ny * L);
+  const mid = w2s(accessPt.x, accessPt.y);
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(mL.x, mL.y);
+  ctx.lineTo(mR.x, mR.y);
+  ctx.lineTo(end.x, end.y);
+  ctx.closePath();
+  ctx.fillStyle   = 'rgba(255,140,0,0.16)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,140,0,0.55)';
+  ctx.lineWidth   = 1;
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(mid.x, mid.y);
+  ctx.lineTo(end.x, end.y);
+  ctx.setLineDash([4, 3]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+// Access stub sliders — live-update the splay in 2D and 3D.
+function onAccessSplayLength(v) {
+  accessSplay.length = +v;
+  document.getElementById('splayLenLabel').textContent = v + 'm';
+  render();
+  if (view === '3d') build3d();
+}
+function onAccessSplayWidth(v) {
+  accessSplay.halfWidth = +v / 2; // slider is the full mouth width
+  document.getElementById('splayWidLabel').textContent = v + 'm';
+  render();
+  if (view === '3d') build3d();
+}
+
+/* ── INTERNAL ESTATE ROAD HELPERS ─────────────────────────── */
+
+// Ray-cast point-in-polygon test against the closed boundary.
+function pointInBoundary(x, y) {
+  let inside = false;
+  for (let i = 0, j = sitePts.length - 1; i < sitePts.length; j = i++) {
+    const xi = sitePts[i].x, yi = sitePts[i].y, xj = sitePts[j].x, yj = sitePts[j].y;
+    if (((yi > y) !== (yj > y)) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+// Start of the road = the inward end of the access stub (keeps the road snapped
+// to the access even if the entrance moves). null when there is no entrance.
+function roadStubPoint() {
+  if (!accessPt || !siteClosed) return null;
+  const e = boundaryEdgeAt(accessPt);
+  if (!e) return null;
+  return { x: accessPt.x + e.nx * accessSplay.length, y: accessPt.y + e.ny * accessSplay.length };
+}
+
+// Full centreline = [stub, ...user points]. Empty until the stub + ≥1 point exist.
+function roadCenterline() {
+  const stub = roadStubPoint();
+  if (!stub || road.pts.length === 0) return [];
+  return [stub, ...road.pts];
+}
+
+function roadLengthM() {
+  const c = roadCenterline();
+  let L = 0;
+  for (let i = 1; i < c.length; i++) L += Math.hypot(c[i].x - c[i - 1].x, c[i].y - c[i - 1].y);
+  return L;
+}
+
+// Carriageway area ≈ centreline length × width (corner overlaps ignored — a
+// planning estimate). Feeds the net developable area in updateStats().
+function roadAreaM2() { return roadLengthM() * road.width; }
+
+// Enter road-draw mode. Drawing happens in 2D, so drop to 2D first.
+function toggleDrawRoad() {
+  if (!siteClosed || sitePts.length < 3 || !accessPt) return;
+  if (view === '3d') setView('2d');
+  movingEntrance = false; movingUtility = null; // road draw is mutually exclusive with marker moves
+  drawingRoad = true;
+  canvas.style.cursor = 'crosshair';
+  document.getElementById('hintBar').textContent = 'Click to extend the road from the access stub — double-click or Esc to finish';
+  refreshRoadUI();
+}
+
+function finishRoad() {
+  drawingRoad = false;
+  // drop a stray duplicate final point left by a double-click
+  const n = road.pts.length;
+  if (n >= 2) {
+    const a = road.pts[n - 1], b = road.pts[n - 2];
+    if (Math.hypot(a.x - b.x, a.y - b.y) < 0.5) road.pts.pop();
+  }
+  canvas.style.cursor = tool === 'select' ? 'default' : 'crosshair';
+  document.getElementById('hintBar').textContent = road.pts.length ? 'Road drawn' : 'Road cleared';
+  updateStats(); refreshRoadUI(); render();
+  if (view === '3d') build3d();
+}
+
+function clearRoad() {
+  road = { pts: [], width: road.width };
+  drawingRoad = false;
+  updateStats(); refreshRoadUI(); render();
+  if (view === '3d') build3d();
+}
+
+function onRoadWidth(v) {
+  road.width = +v;
+  document.getElementById('roadWidthLabel').textContent = v + 'm';
+  updateStats(); render();
+  if (view === '3d') build3d();
+}
+
+// Show road controls only when a boundary + entrance exist; reflect draw state.
+function refreshRoadUI() {
+  const ctrls = document.getElementById('roadControls');
+  if (!ctrls) return;
+  const ready = siteClosed && sitePts.length >= 3 && !!accessPt;
+  ctrls.style.display = ready ? 'flex' : 'none';
+  const hint = document.getElementById('roadHint');
+  if (hint) hint.style.display = ready ? 'none' : 'block';
+  const btn = document.getElementById('roadDrawBtn');
+  if (btn) {
+    btn.classList.toggle('active', drawingRoad);
+    btn.textContent = drawingRoad ? '■ Finish road' : '✐ Draw road';
+  }
+}
+
+// 2D carriageway: grey stroke along the centreline + dashed centre line, plus
+// a live preview segment and vertex handles while drawing.
+function drawRoad2d() {
+  const c = roadCenterline();
+  const stub = roadStubPoint();
+  if (!stub) return;
+  const path = drawingRoad ? [stub, ...road.pts, { x: mw.x, y: mw.y }] : c;
+  if (path.length < 2) {
+    if (!drawingRoad) return;
+  }
+  ctx.save();
+  if (path.length >= 2) {
+    ctx.beginPath();
+    const s0 = w2s(path[0].x, path[0].y);
+    ctx.moveTo(s0.x, s0.y);
+    for (let i = 1; i < path.length; i++) { const s = w2s(path[i].x, path[i].y); ctx.lineTo(s.x, s.y); }
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.strokeStyle = ROAD_COL;
+    ctx.lineWidth = Math.max(2, road.width * SCALE * zoom);
+    ctx.stroke();
+    // dashed centre line
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([6, 6]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  // vertex handles while editing
+  if (drawingRoad) {
+    [stub, ...road.pts].forEach((p, i) => {
+      const s = w2s(p.x, p.y);
+      ctx.beginPath(); ctx.arc(s.x, s.y, i === 0 ? 5 : 3.5, 0, Math.PI * 2);
+      ctx.fillStyle = i === 0 ? '#ffae4d' : '#cfcfcf';
+      ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.stroke();
+    });
+  }
+  ctx.restore();
+}
+
+// 3D carriageway: a flat grey ribbon at ground level, one quad per segment.
+function addRoad3d(scene, cx, cz) {
+  const c = roadCenterline();
+  if (c.length < 2) return;
+  const hw = road.width / 2;
+  const pos = [];
+  const toScene = p => [p.x - cx, 0.12, -(p.y - cz)]; // flat, just above the site slab
+  for (let i = 1; i < c.length; i++) {
+    const a = c[i - 1], b = c[i];
+    const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len * hw, ny = dx / len * hw; // perpendicular offset (editor space)
+    const aL = toScene({ x: a.x + nx, y: a.y + ny }), aR = toScene({ x: a.x - nx, y: a.y - ny });
+    const bL = toScene({ x: b.x + nx, y: b.y + ny }), bR = toScene({ x: b.x - nx, y: b.y - ny });
+    pos.push(...aL, ...aR, ...bR,  ...aL, ...bR, ...bL); // two triangles
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+  geo.computeVertexNormals();
+  const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: 0x6b6b6b, side: THREE.DoubleSide }));
+  mesh.receiveShadow = true;
+  scene.add(mesh);
+}
+
+/* ── TEMP: ACCESS DIAGNOSTIC (one-off, read-only) ─────────────
+   Measures the imported DXF boundary against the surveyed Sayerland Lane
+   access pin and (if present) the georeferenced OS underlay. Console only.
+   Call runAccessDiagnostic() from the console, or it auto-runs on DXF/PDF
+   import while DIAG_ACCESS is true. Draws the raw pin so the gap is visible.
+   Does NOT modify the boundary. Delete this block to remove. */
+
+// OSGB bearing in degrees from grid north, clockwise (dE = easting delta, dN = northing delta).
+function diagBearing(dE, dN) { return (Math.atan2(dE, dN) * 180 / Math.PI + 360) % 360; }
+
+// Fit the 2D view to the boundary AND the access pin so the gap is on screen.
+function fitViewToAccessDiag() {
+  if (!diagPin) return;
+  const xs = sitePts.map(p => p.x).concat(diagPin.x);
+  const ys = sitePts.map(p => p.y).concat(diagPin.y);
+  const bbW = Math.max(...xs) - Math.min(...xs), bbH = Math.max(...ys) - Math.min(...ys);
+  const zX = (canvas.width * 0.78) / ((bbW || 1) * SCALE);
+  const zY = (canvas.height * 0.78) / ((bbH || 1) * SCALE);
+  zoom = Math.max(0.05, Math.min(8, Math.min(zX, zY)));
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+  const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+  panX = canvas.width  / 2 - cx * SCALE * zoom;
+  panY = canvas.height / 2 + cy * SCALE * zoom;
+}
+
+function runAccessDiagnostic() {
+  if (!siteClosed || sitePts.length < 3 || !dxfOrigin) {
+    console.warn('[access-diag] Import the Dashlands DXF (with OSGB frame) first.');
+    return null;
+  }
+  const O = dxfOrigin, n = sitePts.length;
+  const toOSGB = p => ({ e: +(p.x + O.e).toFixed(3), n: +(p.y + O.n).toFixed(3) });
+  const pinEd  = { x: ACCESS_OSGB.e - O.e, y: ACCESS_OSGB.n - O.n };
+
+  // Project a point onto an edge, returning foot, clamp t, and distance.
+  const proj = (a, b, P) => {
+    const dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy;
+    const t = len2 > 0 ? ((P.x - a.x) * dx + (P.y - a.y) * dy) / len2 : 0;
+    const tc = Math.max(0, Math.min(1, t));
+    const fx = a.x + tc * dx, fy = a.y + tc * dy;
+    return { t, foot: { x: fx, y: fy }, dist: Math.hypot(P.x - fx, P.y - fy), len: Math.sqrt(len2), dx, dy };
+  };
+
+  console.group('%c[access-diag] Dashlands boundary vs surveyed Sayerland Lane access', 'font-weight:bold');
+  console.log('DXF centroid (dxfOrigin), OSGB:', O, '| access pin OSGB:', ACCESS_OSGB);
+
+  // (1) Vertices + edges in OSGB
+  console.log('Boundary vertices (OSGB):');
+  console.table(sitePts.map((p, i) => ({ vertex: 'V' + i, ...toOSGB(p) })));
+
+  const edges = sitePts.map((a, i) => {
+    const b = sitePts[(i + 1) % n], pr = proj(a, b, pinEd);
+    const mid = toOSGB({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+    return {
+      edge: `V${i}→V${(i + 1) % n}`,
+      length_m: +pr.len.toFixed(1),
+      bearing_deg: +diagBearing(pr.dx, pr.dy).toFixed(1),
+      midE: mid.e, midN: mid.n,
+      distToPin_m: +pr.dist.toFixed(1),
+      _i: i
+    };
+  });
+  console.log('Edges (length, bearing °from grid-N, edge midpoint OSGB, distance to access pin):');
+  console.table(edges.map(({ _i, ...e }) => e));
+
+  const southEdge = edges.reduce((m, e) => e.midN < m.midN ? e : m, edges[0]);
+  const eastEdge  = edges.reduce((m, e) => e.midE > m.midE ? e : m, edges[0]);
+  console.log(`Southern frontage (lowest mid-northing): ${southEdge.edge}  |  Eastern frontage (highest mid-easting): ${eastEdge.edge}`);
+  console.log(`→ Frontage nearest Sayerland Lane (closest edge to the access pin): ${edges.reduce((m, e) => e.distToPin_m < m.distToPin_m ? e : m, edges[0]).edge}`);
+
+  // (2) Nearest edge (perpendicular distance + bearing) and nearest vertex
+  let near = null;
+  edges.forEach(e => { const pr = proj(sitePts[e._i], sitePts[(e._i + 1) % n], pinEd); if (!near || pr.dist < near.dist) near = { ...pr, edge: e.edge }; });
+  diagNearest = { x: near.foot.x, y: near.foot.y };
+  const onSeg = near.t > 0 && near.t < 1;
+  const bPinFoot = diagBearing(near.foot.x - pinEd.x, near.foot.y - pinEd.y);
+  console.log(`Nearest boundary edge: ${near.edge} — ${near.dist.toFixed(1)} m from pin ` +
+              `(${onSeg ? 'true perpendicular foot' : 'clamped to a vertex'}); foot OSGB ${toOSGB(near.foot).e}, ${toOSGB(near.foot).n}; bearing pin→boundary ${bPinFoot.toFixed(1)}°.`);
+
+  let nv = null;
+  sitePts.forEach((p, i) => { const d = Math.hypot(p.x - pinEd.x, p.y - pinEd.y); if (!nv || d < nv.d) nv = { i, d, p }; });
+  console.log(`Nearest boundary vertex: V${nv.i} OSGB ${toOSGB(nv.p).e}, ${toOSGB(nv.p).n} — ${nv.d.toFixed(1)} m from pin, bearing pin→vertex ${diagBearing(nv.p.x - pinEd.x, nv.p.y - pinEd.y).toFixed(1)}°.`);
+
+  const es = sitePts.map(p => p.x + O.e), ns = sitePts.map(p => p.y + O.n);
+  const eMax = Math.max(...es), nMin = Math.min(...ns);
+  console.log(`Pin vs boundary extent: ${(ACCESS_OSGB.e - eMax).toFixed(1)} m east of the eastern edge, ${(nMin - ACCESS_OSGB.n).toFixed(1)} m south of the southern edge.`);
+
+  // (3) Underlay / lane coincidence
+  if (pdfState && pdfState.georef) {
+    const u = pdfState, inU = P => P.x >= u.wx && P.x <= u.wx + u.ww && P.y <= u.wy && P.y >= u.wy - u.wh;
+    console.log('OS underlay (georeferenced) extent wx,wy(top),ww,wh:', { wx: +u.wx.toFixed(1), wy: +u.wy.toFixed(1), ww: +u.ww.toFixed(1), wh: +u.wh.toFixed(1) });
+    console.log(`  pin inside underlay: ${inU(pinEd)} | nearest boundary point inside underlay: ${inU(near.foot)}`);
+    console.log('%c  The lane carriageway is raster-only in the underlay — coincidence is a VISUAL check (see screenshot). Measured: the boundary stops ' + near.dist.toFixed(0) + ' m short of the surveyed lane access.', 'color:#c80');
+  } else if (pdfState) {
+    console.log('OS underlay loaded but NOT georeferenced — calibrate/auto-georeference it, then re-run runAccessDiagnostic().');
+  } else {
+    console.log('No PDF underlay in this session. Lane is only visible via the georeferenced OS plan — load it and re-run. Proxy: the boundary stops ' + near.dist.toFixed(1) + ' m short of the surveyed access pin (which lies on the lane).');
+  }
+  console.groupEnd();
+
+  // Overlay the raw pin and fit the view so the gap is visible.
+  diagPin = pinEd;
+  if (view === '2d') { fitViewToAccessDiag(); render(); }
+
+  return {
+    centroidOSGB: O, pinOSGB: ACCESS_OSGB,
+    nearestEdge: { edge: near.edge, dist_m: +near.dist.toFixed(1), perpendicular: onSeg, bearing_pin_to_boundary: +bPinFoot.toFixed(1) },
+    nearestVertex: { v: nv.i, osgb: toOSGB(nv.p), dist_m: +nv.d.toFixed(1) },
+    southEdge: southEdge.edge, eastEdge: eastEdge.edge,
+    pinEastOfBoundary_m: +(ACCESS_OSGB.e - eMax).toFixed(1),
+    pinSouthOfBoundary_m: +(nMin - ACCESS_OSGB.n).toFixed(1)
+  };
+}
+
+/* ── SITE UTILITY HELPERS ─────────────────────────────────── */
+
+// Derive the three surveyed default positions from the current boundary.
+// SEWER → midpoint of the northernmost edge; WATER → boundary near the
+// entrance (road frontage); ELEC → just outside the south-west corner.
+function setDefaultUtilities() {
+  if (!siteClosed || sitePts.length < 3) {
+    utilities = { sewer: null, water: null, elec: null };
+    return;
+  }
+
+  // SEWER — midpoint of the edge whose midpoint sits furthest north
+  let sewer = null, bestY = -Infinity;
+  for (let i = 0; i < sitePts.length; i++) {
+    const a = sitePts[i], b = sitePts[(i + 1) % sitePts.length];
+    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    if (mid.y > bestY) { bestY = mid.y; sewer = mid; }
+  }
+
+  // WATER — boundary point on the frontage near the entrance (offset SE so it
+  // doesn't sit exactly on the entrance marker)
+  const water = accessPt
+    ? nearestPointOnBoundary(accessPt.x + 10, accessPt.y - 6)
+    : sewer;
+
+  // ELEC — south-west vertex (lowest x+y), pushed outward from the centroid
+  const cx = sitePts.reduce((s, p) => s + p.x, 0) / sitePts.length;
+  const cy = sitePts.reduce((s, p) => s + p.y, 0) / sitePts.length;
+  let sw = sitePts[0];
+  sitePts.forEach(p => { if ((p.x + p.y) < (sw.x + sw.y)) sw = p; });
+  const dx = sw.x - cx, dy = sw.y - cy, len = Math.hypot(dx, dy) || 1;
+  const elec = { x: sw.x + (dx / len) * 8, y: sw.y + (dy / len) * 8 };
+
+  utilities = { sewer, water, elec };
+}
+
+// Enter "move utility" mode for a chosen marker. Placement happens in 2D.
+function toggleMoveUtility(which) {
+  if (!siteClosed || sitePts.length < 3) return;
+  if (view === '3d') setView('2d');
+  movingEntrance = false; // utility move and entrance move are mutually exclusive
+  movingUtility  = which;
+  canvas.style.cursor = 'crosshair';
+  const snaps = which !== 'elec';
+  document.getElementById('hintBar').textContent =
+    `Click to place ${UTIL_LABELS[which]}` + (snaps ? ' — snaps to boundary' : ' — off-site, free placement');
+  refreshUtilityUI();
+}
+
+// Show the utility controls only when a boundary exists; reflect active button.
+function refreshUtilityUI() {
+  const ctrls = document.getElementById('utilityControls');
+  if (!ctrls) return;
+  ctrls.style.display = (siteClosed && sitePts.length >= 3) ? 'flex' : 'none';
+  ['sewer', 'water', 'elec'].forEach(k => {
+    const b = document.getElementById('utilBtn_' + k);
+    if (b) b.classList.toggle('active', movingUtility === k);
+  });
+}
+
 /* ── STATS ────────────────────────────────────────────────── */
 function updateStats() {
   const sA  = siteClosed && sitePts.length >= 3 ? polyArea(sitePts) : 0;
@@ -200,13 +636,24 @@ function updateStats() {
   document.getElementById('cPct').textContent      = sA > 0 ? ((bA / sA) * 100).toFixed(0) + '%' : '—';
 
   // ── Dwelling capacity (3D massing) — reuses the site area sA above ──
-  const ha   = sA > 0 ? sA / 10000 : 0;
-  const dens = (ha > 0 && placedDwellings > 0) ? placedDwellings / ha : 0;
-  document.getElementById('sSiteHa').textContent    = ha > 0 ? ha.toFixed(2) : '0.00';
-  document.getElementById('sDwellings').textContent = placedDwellings;
-  document.getElementById('sDensity').textContent   = dens > 0 ? dens.toFixed(1) : '0';
+  // Net developable = gross − measured road area − (SuDS/open-space % of gross).
+  // Headline density is dwellings per NET hectare, gross shown alongside.
+  const roadM2    = roadAreaM2();
+  const netM2     = Math.max(0, sA * (1 - deductPct / 100) - roadM2);
+  const ha        = sA > 0 ? sA / 10000 : 0;
+  const netHa     = netM2 / 10000;
+  const densNet   = (netHa > 0 && placedDwellings > 0) ? placedDwellings / netHa : 0;
+  const densGross = (ha    > 0 && placedDwellings > 0) ? placedDwellings / ha    : 0;
+  document.getElementById('sSiteHa').textContent      = ha > 0 ? ha.toFixed(2) : '0.00';
+  document.getElementById('sNetHa').textContent       = netHa > 0 ? netHa.toFixed(2) : '0.00';
+  document.getElementById('sDwellings').textContent   = placedDwellings;
+  document.getElementById('sDensity').textContent     = densNet > 0 ? densNet.toFixed(1) : '0';
+  document.getElementById('sDensityGross').textContent = densGross > 0 ? densGross.toFixed(1) : '0';
+  document.getElementById('sRoad').textContent        = roadM2 > 0 ? Math.round(roadM2) : 0;
 
   refreshEntranceUI();
+  refreshUtilityUI();
+  refreshRoadUI();
 }
 
 /* ── PROPERTIES PANEL ─────────────────────────────────────── */
@@ -299,6 +746,29 @@ canvas.addEventListener('click', e => {
   if (dragging) return;
   const w2 = s2w(cp(e).x, cp(e).y);
 
+  // Draw road: append a centreline point, clamped to stay inside the boundary
+  if (drawingRoad) {
+    const p = pointInBoundary(w2.x, w2.y) ? { x: w2.x, y: w2.y } : nearestPointOnBoundary(w2.x, w2.y);
+    road.pts.push(p);
+    updateStats(); render();
+    return;
+  }
+
+  // Move utility: SEWER/WATER snap to the boundary; ELEC places freely (off-site)
+  if (movingUtility) {
+    const which = movingUtility;
+    utilities[which] = which === 'elec'
+      ? { x: w2.x, y: w2.y }
+      : nearestPointOnBoundary(w2.x, w2.y);
+    movingUtility = null;
+    canvas.style.cursor = tool === 'select' ? 'default' : 'crosshair';
+    document.getElementById('hintBar').textContent = UTIL_LABELS[which] + ' placed';
+    refreshUtilityUI();
+    render();
+    showToast(UTIL_LABELS[which] + ' moved');
+    return;
+  }
+
   // Move entrance: snap to the nearest point on the boundary edge, then exit mode
   if (movingEntrance) {
     accessPt       = nearestPointOnBoundary(w2.x, w2.y);
@@ -337,9 +807,12 @@ canvas.addEventListener('click', e => {
 });
 
 canvas.addEventListener('dblclick', e => {
+  if (drawingRoad) { finishRoad(); return; }
   if (tool === 'site' && sitePts.length >= 3 && !siteClosed) {
     siteClosed = true;
     setDefaultAccessPoint();
+    setDefaultUtilities();
+    road = { pts: [], width: road.width }; drawingRoad = false; // new boundary → clear road
     setTool('site');
     document.getElementById('hintBar').textContent = 'Site boundary closed — switch to Building tool';
     updateStats(); render();
@@ -375,6 +848,7 @@ document.addEventListener('keydown', e => {
     return;
   }
 
+  if (e.key === 'Escape' && drawingRoad) { finishRoad(); return; }
   if ((e.key === 'Delete' || e.key === 'Backspace') && selected && document.activeElement === document.body) delSel();
   if (e.key === 'Escape') { selected = null; updateProps(); render(); }
   if (e.key === 'b') setTool('building');
@@ -471,6 +945,12 @@ function render() {
     }
   }
 
+  // Internal estate road (drawn over the boundary fill, under the access markers)
+  drawRoad2d();
+
+  // Access stub / visibility splay (drawn under the entrance marker)
+  drawAccessStub();
+
   // Site access point (entrance) marker — sits on the boundary line
   if (accessPt && siteClosed) {
     const sp = w2s(accessPt.x, accessPt.y);
@@ -493,6 +973,53 @@ function render() {
     ctx.textAlign    = 'left';
     ctx.textBaseline = 'middle';
     ctx.fillText('Entrance', sp.x + r + 4, sp.y);
+    ctx.restore();
+  }
+
+  // Site utility markers (sewer / water / elec) — coloured squares + labels
+  if (siteClosed) {
+    Object.keys(utilities).forEach(k => {
+      const u = utilities[k];
+      if (!u) return;
+      const sp = w2s(u.x, u.y), col = UTIL_COLS[k], s = 6;
+      ctx.save();
+      ctx.fillStyle   = col;
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth   = 1.5;
+      ctx.fillRect(sp.x - s, sp.y - s, s * 2, s * 2);
+      ctx.strokeRect(sp.x - s, sp.y - s, s * 2, s * 2);
+      ctx.font         = '10px DM Mono';
+      ctx.fillStyle    = col;
+      ctx.textAlign    = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(UTIL_LABELS[k], sp.x + s + 3, sp.y);
+      ctx.restore();
+    });
+  }
+
+  // TEMP access diagnostic overlay (one-off): raw surveyed pin + connector to boundary
+  if (diagPin && siteClosed) {
+    const sp = w2s(diagPin.x, diagPin.y);
+    if (diagNearest) {
+      const sn = w2s(diagNearest.x, diagNearest.y);
+      const dm = Math.hypot(diagPin.x - diagNearest.x, diagPin.y - diagNearest.y);
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,60,60,0.9)'; ctx.lineWidth = 1.5; ctx.setLineDash([6, 4]);
+      ctx.beginPath(); ctx.moveTo(sp.x, sp.y); ctx.lineTo(sn.x, sn.y); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.font = '11px DM Mono'; ctx.fillStyle = 'rgba(255,90,90,0.95)'; ctx.textAlign = 'center';
+      ctx.fillText(dm.toFixed(0) + ' m gap', (sp.x + sn.x) / 2, (sp.y + sn.y) / 2 - 6);
+      ctx.restore();
+    }
+    ctx.save();
+    ctx.strokeStyle = '#ff3c3c'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(sp.x - 7, sp.y); ctx.lineTo(sp.x + 7, sp.y);
+    ctx.moveTo(sp.x, sp.y - 7); ctx.lineTo(sp.x, sp.y + 7);
+    ctx.arc(sp.x, sp.y, 7, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.font = 'bold 10px DM Mono'; ctx.fillStyle = '#ff5a5a'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText('ACCESS PIN (surveyed)', sp.x + 11, sp.y);
     ctx.restore();
   }
 
@@ -572,6 +1099,13 @@ function onDwellingSlider() {
   dwellingCount = +document.getElementById('dwellingSlider').value;
   document.getElementById('dwellingCountLabel').textContent = dwellingCount;
   if (view === '3d') build3d();
+}
+
+/* ── NET DEVELOPABLE AREA SLIDER ──────────────────────────── */
+function onDeductSlider() {
+  deductPct = +document.getElementById('deductSlider').value;
+  document.getElementById('deductPctLabel').textContent = deductPct + '%';
+  updateStats();
 }
 
 /* ── 3D VIEW ──────────────────────────────────────────────── */
@@ -736,6 +1270,69 @@ function addEntrance3d(scene, cx, cz) {
   scene.add(spr);
 }
 
+// Adds the access stub / visibility splay to the 3D scene as a flat amber
+// triangle lying on the ground, matching the site-mesh coordinate convention.
+function addAccessStub3d(scene, cx, cz) {
+  if (!accessPt || !siteClosed) return;
+  const e = boundaryEdgeAt(accessPt);
+  if (!e) return;
+  const L = accessSplay.length, HW = accessSplay.halfWidth;
+  const pts = [
+    { x: accessPt.x - e.dhx * HW, y: accessPt.y - e.dhy * HW }, // mouth left
+    { x: accessPt.x + e.dhx * HW, y: accessPt.y + e.dhy * HW }, // mouth right
+    { x: accessPt.x + e.nx * L,   y: accessPt.y + e.ny * L },   // stub end (inward)
+  ];
+  const shape = new THREE.Shape();
+  shape.moveTo(pts[0].x - cx, pts[0].y - cz);
+  shape.lineTo(pts[1].x - cx, pts[1].y - cz);
+  shape.lineTo(pts[2].x - cx, pts[2].y - cz);
+  shape.closePath();
+  const m = new THREE.Mesh(
+    new THREE.ShapeGeometry(shape),
+    new THREE.MeshLambertMaterial({ color: 0xff8c00, transparent: true, opacity: 0.5, side: THREE.DoubleSide })
+  );
+  m.rotation.x = -Math.PI / 2; // shape XY → ground XZ, same as the site slab
+  m.position.y = 0.15;         // just above the 0.1 site mesh
+  scene.add(m);
+}
+
+// Adds all present utility markers to the 3D scene (entrance-style posts).
+function addUtilities3d(scene, cx, cz) {
+  Object.keys(utilities).forEach(k => {
+    if (utilities[k]) addUtilityMarker3d(scene, cx, cz, utilities[k], UTIL_COLS[k], UTIL_LABELS[k]);
+  });
+}
+
+// A coloured post + cap + canvas-sprite label for one utility marker.
+function addUtilityMarker3d(scene, cx, cz, pt, colorHex, label) {
+  const tx = pt.x - cx, tz = -(pt.y - cz), POST_H = 5;
+  const mat = new THREE.MeshLambertMaterial({ color: new THREE.Color(colorHex) });
+
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, POST_H, 8), mat);
+  post.position.set(tx, POST_H / 2, tz);
+  post.castShadow = true;
+  scene.add(post);
+
+  const cap = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.6, 1.6), mat);
+  cap.position.set(tx, POST_H + 0.8, tz);
+  cap.castShadow = true;
+  scene.add(cap);
+
+  const cv = document.createElement('canvas');
+  cv.width = 256; cv.height = 64;
+  const g = cv.getContext('2d');
+  g.font = 'bold 30px DM Mono, monospace';
+  g.fillStyle = colorHex;
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillText(label, 128, 32);
+  const tex = new THREE.CanvasTexture(cv);
+  const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true }));
+  spr.scale.set(10, 2.5, 1);
+  spr.position.set(tx, POST_H + 3, tz);
+  scene.add(spr);
+}
+
 let r3, s3, cam3, anim3;
 let theta = 45, phi = 40, radius = 200;
 let target3 = { x: 0, y: 0, z: 0 }; // camera look-at target — moved by panning
@@ -796,8 +1393,10 @@ function build3d() {
         const wpp = 2 * radius * Math.tan((cam3.fov * Math.PI / 180) / 2) / hPx;
         const rX = Math.cos(tr),  rZ = -Math.sin(tr); // screen-right on the ground
         const fX = -Math.sin(tr), fZ = -Math.cos(tr); // ground-forward (into screen)
-        target3.x += (-rX * dx - fX * dy) * wpp;
-        target3.z += (-rZ * dx - fZ * dy) * wpp;
+        // Grab-consistent on both axes (matches the 2D plan pan): dragging moves
+        // the scene with the cursor.
+        target3.x += (-rX * dx + fX * dy) * wpp;
+        target3.z += (-rZ * dx + fZ * dy) * wpp;
       } else {
         theta -= dx * 0.4;
         phi = Math.max(5, Math.min(85, phi - dy * 0.4));
@@ -878,7 +1477,10 @@ function build3d() {
   });
 
   buildDwellingMassing(s3, sitePts, cx, cz, dwellingCount);
+  addRoad3d(s3, cx, cz);
   addEntrance3d(s3, cx, cz);
+  addAccessStub3d(s3, cx, cz);
+  addUtilities3d(s3, cx, cz);
   updateStats(); // reflect placed dwelling count + density in the stats panel
 
   if (anim3) cancelAnimationFrame(anim3);
@@ -892,6 +1494,8 @@ function clearAll() {
   sitePts = []; siteClosed = false; buildings = []; selected = null;
   placedDwellings = 0;
   accessPt = null; movingEntrance = false;
+  utilities = { sewer: null, water: null, elec: null }; movingUtility = null;
+  road = { pts: [], width: road.width }; drawingRoad = false;
   updateStats(); render(); updateProps(); setTool('site');
 }
 
@@ -925,7 +1529,7 @@ function saveEditorProject() {
     created:     new Date().toISOString(),
     type:        'editor',
     stats:       { gfa, buildings: buildings.length, siteArea: sA, floors: buildings.length ? Math.max(...buildings.map(b => b.floors)) : 0 },
-    editorState: { sitePts, siteClosed, buildings, defW, defD, defF, accessPt }
+    editorState: { sitePts, siteClosed, buildings, defW, defD, defF, accessPt, accessSplay, road, utilities, deductPct }
   });
   showToast('Project saved!');
 }
@@ -1115,6 +1719,8 @@ function loadPDF(input) {
       document.getElementById('pdfOpacity').value          = '35';
       document.getElementById('pdfOpacityVal').textContent = '35%';
       render();
+      // TEMP one-off: re-run the access diagnostic now the underlay is present
+      if (DIAG_ACCESS && pdfState && pdfState.georef && dxfOrigin) runAccessDiagnostic();
     } catch (err) {
       status.textContent = 'Failed to load PDF';
       status.className   = 'pdf-status';
@@ -1343,11 +1949,14 @@ function loadDXF(input) {
       dxfOrigin  = { e: cx, n: cy }; // OSGB centroid — lets a georeferenced PDF align to this frame
 
       setDefaultAccessPoint(); // entrance defaults to the new southern tip
+      setDefaultUtilities();   // utilities reset to surveyed defaults on re-import
+      road = { pts: [], width: road.width }; drawingRoad = false; // new boundary → clear road
       fitViewToBoundary(sitePts);
       updateStats();
       render();
       if (view === '3d') build3d(); // refresh 3D so it tracks the imported boundary
       alignPdfToDxf();              // snap an already-georeferenced PDF under the boundary
+      if (DIAG_ACCESS) runAccessDiagnostic(); // TEMP one-off measurement (console)
 
       const areaHa = (polyArea(sitePts) / 10000).toFixed(2);
       const ptCount = vertices.length;
@@ -1377,6 +1986,8 @@ function clearDXFBoundary() {
   siteClosed = false;
   placedDwellings = 0;
   accessPt = null; movingEntrance = false;
+  utilities = { sewer: null, water: null, elec: null }; movingUtility = null;
+  road = { pts: [], width: road.width }; drawingRoad = false;
   dxfOrigin = null;
   document.getElementById('dxfStatus').textContent  = 'No boundary loaded';
   document.getElementById('dxfStatus').className    = 'pdf-status';
@@ -1406,6 +2017,19 @@ if (new URLSearchParams(window.location.search).get('load')) {
     nid  = buildings.length ? Math.max(...buildings.map(b => b.id)) + 1 : 1;
     accessPt = saved.accessPt || null;
     if (!accessPt && siteClosed && sitePts.length >= 3) setDefaultAccessPoint();
+    accessSplay = saved.accessSplay || { length: 20, halfWidth: 8 };
+    document.getElementById('splayLenSlider').value      = accessSplay.length;
+    document.getElementById('splayLenLabel').textContent = accessSplay.length + 'm';
+    document.getElementById('splayWidSlider').value      = accessSplay.halfWidth * 2;
+    document.getElementById('splayWidLabel').textContent = (accessSplay.halfWidth * 2) + 'm';
+    utilities = saved.utilities || { sewer: null, water: null, elec: null };
+    if (!saved.utilities && siteClosed && sitePts.length >= 3) setDefaultUtilities();
+    road = saved.road || { pts: [], width: 5 };
+    document.getElementById('roadWidthSlider').value      = road.width;
+    document.getElementById('roadWidthLabel').textContent = road.width + 'm';
+    deductPct = (typeof saved.deductPct === 'number') ? saved.deductPct : 25;
+    document.getElementById('deductSlider').value      = deductPct;
+    document.getElementById('deductPctLabel').textContent = deductPct + '%';
     document.getElementById('dW').value = defW;
     document.getElementById('dD').value = defD;
     document.getElementById('dF').value = defF;
@@ -1419,6 +2043,7 @@ if (new URLSearchParams(window.location.search).get('load')) {
     sitePts    = [{ x: -35, y: -25 }, { x: 35, y: -25 }, { x: 35, y: 25 }, { x: -35, y: 25 }];
     siteClosed = true;
     setDefaultAccessPoint();
+    setDefaultUtilities();
     document.getElementById('hintBar').textContent = 'Demo site loaded — use Building tool to place blocks';
     updateStats(); render();
     showToast('Demo site loaded — try placing some buildings!');
