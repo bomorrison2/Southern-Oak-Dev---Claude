@@ -87,6 +87,8 @@
     .mix-list { display: flex; flex-direction: column; gap: 3px; }
     .mix-row { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 9px; color: var(--text-dim); }
     .mix-row span:last-child { color: var(--text); }
+    /* SuDS type selector active state */
+    .suds-type.active { background: rgba(33,150,243,0.16); border-color: #2196f3; color: #5db4f5; }
 
     /* CANVAS */
     .canvas-wrap { flex: 1; position: relative; overflow: hidden; background: var(--bg); }
@@ -188,6 +190,7 @@
         <div class="stat-box"><div class="stat-val green" id="sNetHa">0.00</div><div class="stat-label">Net ha · dev.</div></div>
         <div class="stat-box"><div class="stat-val"       id="sSite">0</div><div class="stat-label">Site m²</div></div>
         <div class="stat-box"><div class="stat-val"       id="sRoad">0</div><div class="stat-label">Road m²</div></div>
+        <div class="stat-box"><div class="stat-val"       id="sSuds">0</div><div class="stat-label">SuDS m²</div></div>
         <div class="stat-box"><div class="stat-val"       id="sBuild">0</div><div class="stat-label">Footprint m²</div></div>
         <div class="stat-box"><div class="stat-val green" id="sGFA">0</div><div class="stat-label">GFA m²</div></div>
         <div class="stat-box"><div class="stat-val"       id="sFAR">0.0</div><div class="stat-label">FAR</div></div>
@@ -195,13 +198,13 @@
         <div class="stat-box"><div class="stat-val"       id="sFloors">—</div><div class="stat-label">Max Floors</div></div>
       </div>
       <div class="ctrl-row" style="margin-top:12px">
-        <span class="ctrl-label">SuDS / open space</span>
+        <span class="ctrl-label">Open space / landscape</span>
         <span class="ctrl-val" id="deductPctLabel">25%</span>
       </div>
       <input type="range" class="slider" id="deductSlider"
              min="0" max="60" value="25" oninput="onDeductSlider()"/>
       <div style="font-family:var(--mono);font-size:8px;color:var(--text-dimmer);margin-top:5px;line-height:1.5">
-        Roads measured from drawn geometry · net = gross − road − SuDS/open-space%
+        Road + SuDS measured from drawn geometry · net = gross − road − SuDS − open-space%
       </div>
     </div>
 
@@ -312,6 +315,41 @@
       </div>
       <div id="roadHint" style="font-size:10px;color:var(--text-dimmer);line-height:1.6">
         Load a boundary and set the entrance first.
+      </div>
+    </div>
+
+    <div class="sb-section">
+      <div class="sb-title">Drainage · SuDS</div>
+      <div id="sudsHint" style="font-size:10px;color:var(--text-dimmer);line-height:1.6">
+        Load a boundary first, then draw attenuation areas.
+      </div>
+      <!-- Shown only when a boundary exists (toggled by refreshSudsUI) -->
+      <div class="pdf-controls" id="sudsControls" style="display:none">
+        <div style="display:flex;gap:4px">
+          <button class="preset-btn suds-type active" id="sudsType_pond"
+                  onclick="setSudsType('pond')" style="flex:1;text-align:center;padding:7px 4px">Pond</button>
+          <button class="preset-btn suds-type" id="sudsType_raingarden"
+                  onclick="setSudsType('raingarden')" style="flex:1;text-align:center;padding:7px 4px">Rain gdn</button>
+          <button class="preset-btn suds-type" id="sudsType_permeable"
+                  onclick="setSudsType('permeable')" style="flex:1;text-align:center;padding:7px 4px">Permeable</button>
+        </div>
+        <button class="preset-btn" id="sudsDrawBtn" onclick="toggleDrawSuds()"
+                style="border-color:rgba(33,150,243,0.5);color:#5db4f5;margin-top:6px">
+          ✐ Draw SuDS area
+        </button>
+        <div style="display:flex;gap:4px">
+          <button class="preset-btn" onclick="undoSuds()" style="flex:1;text-align:center">↶ Undo</button>
+          <button class="preset-btn" onclick="clearSuds()"
+                  style="flex:1;text-align:center;border-color:rgba(255,80,80,0.2);color:rgba(255,100,100,0.6)">✕ Clear</button>
+        </div>
+        <div class="ctrl-row" style="margin-top:8px">
+          <span class="ctrl-label">SuDS area</span>
+          <span class="ctrl-val" id="sudsAreaLabel">0 m²</span>
+        </div>
+        <div id="sudsSummary" class="mix-list">No SuDS drawn yet.</div>
+        <div style="font-family:var(--mono);font-size:8px;color:var(--text-dimmer);margin-top:6px;line-height:1.5">
+          Attenuation only — Weald Clay rules out soakaways. Area feeds net developable.
+        </div>
       </div>
     </div>
 

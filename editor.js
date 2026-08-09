@@ -57,6 +57,21 @@ const HOUSE_MIX = [
   ['bungalow2', 0.17],
   ['detached4', 0.15],
 ];
+/* ── ATTENUATION SuDS ─────────────────────────────────────── */
+// Drawable sustainable-drainage areas. Weald Clay rules out soakaways, so every
+// type here is ATTENUATION-based (stores water, releases at a controlled rate).
+// Each: { id, type, pts: [{x,y}, ...] } as a closed polygon in site world coords.
+let suds        = [];
+let drawingSuds = false;
+let sudsDraft   = [];       // in-progress polygon vertices
+let sudsType    = 'pond';   // current type being drawn
+let sudsId      = 1;
+const SUDS_TYPES = {
+  pond:       { label: 'Attenuation pond',  color: '#2196f3' },
+  raingarden: { label: 'Rain garden',       color: '#26a69a' },
+  permeable:  { label: 'Permeable paving',  color: '#7e9bb0' },
+};
+
 // Generation parameters (adjustable in the sidebar).
 let genParams = {
   frontSetback: 6,   // m from carriageway edge to the house front (front garden)
@@ -716,6 +731,7 @@ function footprintCorners(cx, cy, hw, hd, t, n) {
 function footprintValid(cx, cy, hw, hd, t, n) {
   const b = boundaryBounds();
   const roadClear = road.width / 2 + 0.5; // keep the whole footprint off the carriageway
+  if (inAnySuds(cx, cy)) return false;    // don't build on attenuation SuDS areas
   for (const c of footprintCorners(cx, cy, hw, hd, t, n)) {
     if (!pointInBoundary(c.x, c.y)) return false;
     if (distToBoundary(c.x, c.y) < genParams.boundaryInset) return false;
@@ -968,6 +984,174 @@ function schemeMix() {
   return tally;
 }
 
+/* ── ATTENUATION SuDS HELPERS ─────────────────────────────── */
+
+// Ray-cast point-in-polygon for an arbitrary vertex list.
+function pointInPoly(pts, x, y) {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const xi = pts[i].x, yi = pts[i].y, xj = pts[j].x, yj = pts[j].y;
+    if (((yi > y) !== (yj > y)) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+// Combined area of all drawn SuDS polygons (m²). Feeds net developable area.
+function sudsAreaM2() {
+  return suds.reduce((s, f) => s + (f.pts.length >= 3 ? polyArea(f.pts) : 0), 0);
+}
+
+// True if (x,y) falls inside any drawn SuDS polygon — used to keep homes off them.
+function inAnySuds(x, y) {
+  return suds.some(f => f.pts.length >= 3 && pointInPoly(f.pts, x, y));
+}
+
+// Enter SuDS-draw mode (2D). Mutually exclusive with the other draw/move modes.
+function toggleDrawSuds() {
+  if (!siteClosed || sitePts.length < 3) return;
+  if (view === '3d') setView('2d');
+  drawingRoad = false; movingEntrance = false; movingUtility = null;
+  drawingSuds = true; sudsDraft = [];
+  canvas.style.cursor = 'crosshair';
+  document.getElementById('hintBar').textContent =
+    `Click to outline the ${SUDS_TYPES[sudsType].label} — double-click or Esc to close`;
+  refreshSudsUI();
+}
+
+function setSudsType(t) {
+  sudsType = t;
+  refreshSudsUI();
+  if (drawingSuds) document.getElementById('hintBar').textContent =
+    `Click to outline the ${SUDS_TYPES[sudsType].label} — double-click or Esc to close`;
+}
+
+// Close the in-progress polygon into the suds list (needs ≥3 vertices).
+function finishSuds() {
+  if (sudsDraft.length >= 3) {
+    suds.push({ id: sudsId++, type: sudsType, pts: sudsDraft.slice() });
+    if (dwellings.length) generateScheme(); // homes keep clear of the new SuDS area
+    showToast(`${SUDS_TYPES[sudsType].label} added — ${Math.round(polyArea(sudsDraft))} m²`);
+  }
+  sudsDraft = [];
+  drawingSuds = false;
+  canvas.style.cursor = tool === 'select' ? 'default' : 'crosshair';
+  document.getElementById('hintBar').textContent = suds.length ? 'SuDS area drawn' : 'SuDS cleared';
+  updateStats(); refreshSudsUI(); render();
+  if (view === '3d') build3d();
+}
+
+function clearSuds() {
+  suds = []; sudsDraft = []; drawingSuds = false;
+  updateStats(); refreshSudsUI(); render();
+  if (view === '3d') build3d();
+  if (dwellings.length) generateScheme();
+  showToast('SuDS cleared');
+}
+
+// Undo the last completed SuDS polygon.
+function undoSuds() {
+  if (drawingSuds && sudsDraft.length) { sudsDraft.pop(); render(); return; }
+  if (suds.length) { suds.pop(); updateStats(); render(); if (view === '3d') build3d(); if (dwellings.length) generateScheme(); }
+}
+
+// Show SuDS controls only when a boundary exists; reflect active type + draw state.
+function refreshSudsUI() {
+  const ctrls = document.getElementById('sudsControls');
+  const hint  = document.getElementById('sudsHint');
+  if (!ctrls) return;
+  const ready = siteClosed && sitePts.length >= 3;
+  ctrls.style.display = ready ? 'flex' : 'none';
+  if (hint) hint.style.display = ready ? 'none' : 'block';
+  Object.keys(SUDS_TYPES).forEach(k => {
+    const b = document.getElementById('sudsType_' + k);
+    if (b) b.classList.toggle('active', sudsType === k);
+  });
+  const btn = document.getElementById('sudsDrawBtn');
+  if (btn) {
+    btn.classList.toggle('active', drawingSuds);
+    btn.textContent = drawingSuds ? '■ Finish area' : '✐ Draw SuDS area';
+  }
+  const areaEl = document.getElementById('sudsAreaLabel');
+  if (areaEl) areaEl.textContent = Math.round(sudsAreaM2()) + ' m²';
+}
+
+// 2D: filled translucent SuDS polygons + the in-progress outline while drawing.
+function drawSuds2d() {
+  if (!siteClosed) return;
+  ctx.save();
+  suds.forEach(f => {
+    if (f.pts.length < 2) return;
+    const col = (SUDS_TYPES[f.type] || SUDS_TYPES.pond).color;
+    ctx.beginPath();
+    const s0 = w2s(f.pts[0].x, f.pts[0].y);
+    ctx.moveTo(s0.x, s0.y);
+    for (let i = 1; i < f.pts.length; i++) { const s = w2s(f.pts[i].x, f.pts[i].y); ctx.lineTo(s.x, s.y); }
+    ctx.closePath();
+    ctx.fillStyle = col + '33';
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 1.4;
+    ctx.fill(); ctx.stroke();
+    // label at centroid
+    if (zoom > 0.3) {
+      const cxp = f.pts.reduce((s, p) => s + p.x, 0) / f.pts.length;
+      const cyp = f.pts.reduce((s, p) => s + p.y, 0) / f.pts.length;
+      const sp = w2s(cxp, cyp);
+      ctx.font = '9px DM Mono'; ctx.fillStyle = col; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText((SUDS_TYPES[f.type] || {}).label || 'SuDS', sp.x, sp.y);
+    }
+  });
+  // In-progress draft
+  if (drawingSuds && sudsDraft.length) {
+    const col = SUDS_TYPES[sudsType].color;
+    ctx.beginPath();
+    const s0 = w2s(sudsDraft[0].x, sudsDraft[0].y);
+    ctx.moveTo(s0.x, s0.y);
+    for (let i = 1; i < sudsDraft.length; i++) { const s = w2s(sudsDraft[i].x, sudsDraft[i].y); ctx.lineTo(s.x, s.y); }
+    const sm = w2s(mw.x, mw.y);
+    ctx.lineTo(sm.x, sm.y);
+    ctx.strokeStyle = col; ctx.lineWidth = 1.4; ctx.setLineDash([5, 4]);
+    ctx.stroke(); ctx.setLineDash([]);
+    sudsDraft.forEach(p => {
+      const s = w2s(p.x, p.y);
+      ctx.beginPath(); ctx.arc(s.x, s.y, 3, 0, Math.PI * 2);
+      ctx.fillStyle = col; ctx.fill();
+    });
+  }
+  ctx.restore();
+}
+
+// 3D: ponds as a recessed water plane; rain gardens / permeable as flat ground planes.
+function addSuds3d(scene, cx, cz) {
+  suds.forEach(f => {
+    if (f.pts.length < 3) return;
+    const shape = new THREE.Shape();
+    shape.moveTo(f.pts[0].x - cx, f.pts[0].y - cz);
+    for (let i = 1; i < f.pts.length; i++) shape.lineTo(f.pts[i].x - cx, f.pts[i].y - cz);
+    shape.closePath();
+    const col = (SUDS_TYPES[f.type] || SUDS_TYPES.pond).color;
+    const isPond = f.type === 'pond';
+    const mat = new THREE.MeshLambertMaterial({
+      color: new THREE.Color(col),
+      transparent: true, opacity: isPond ? 0.75 : 0.55, side: THREE.DoubleSide,
+    });
+    const m = new THREE.Mesh(new THREE.ShapeGeometry(shape), mat);
+    m.rotation.x = -Math.PI / 2;
+    m.position.y = isPond ? -0.4 : 0.14; // pond sits below grade; others hug the slab
+    m.receiveShadow = true;
+    scene.add(m);
+  });
+}
+
+// SuDS mix tally for the stats panel.
+function sudsSummary() {
+  const tally = {};
+  suds.forEach(f => {
+    const label = (SUDS_TYPES[f.type] || {}).label || f.type;
+    tally[label] = (tally[label] || 0) + polyArea(f.pts);
+  });
+  return tally;
+}
+
 /* ── STATS ────────────────────────────────────────────────── */
 function updateStats() {
   const sA  = siteClosed && sitePts.length >= 3 ? polyArea(sitePts) : 0;
@@ -988,11 +1172,13 @@ function updateStats() {
   document.getElementById('cFAR').textContent      = far;
   document.getElementById('cPct').textContent      = sA > 0 ? ((bA / sA) * 100).toFixed(0) + '%' : '—';
 
-  // ── Dwelling capacity (3D massing) — reuses the site area sA above ──
-  // Net developable = gross − measured road area − (SuDS/open-space % of gross).
+  // ── Dwelling capacity — reuses the site area sA above ──
+  // Net developable = gross − measured road − measured SuDS − (open-space % of gross).
+  // Road and SuDS come from drawn geometry; the % is a landscape/open-space allowance.
   // Headline density is dwellings per NET hectare, gross shown alongside.
   const roadM2    = roadAreaM2();
-  const netM2     = Math.max(0, sA * (1 - deductPct / 100) - roadM2);
+  const sudsM2    = sudsAreaM2();
+  const netM2     = Math.max(0, sA * (1 - deductPct / 100) - roadM2 - sudsM2);
   const ha        = sA > 0 ? sA / 10000 : 0;
   const netHa     = netM2 / 10000;
   const densNet   = (netHa > 0 && placedDwellings > 0) ? placedDwellings / netHa : 0;
@@ -1003,6 +1189,8 @@ function updateStats() {
   document.getElementById('sDensity').textContent     = densNet > 0 ? densNet.toFixed(1) : '0';
   document.getElementById('sDensityGross').textContent = densGross > 0 ? densGross.toFixed(1) : '0';
   document.getElementById('sRoad').textContent        = roadM2 > 0 ? Math.round(roadM2) : 0;
+  const sudsEl = document.getElementById('sSuds');
+  if (sudsEl) sudsEl.textContent = sudsM2 > 0 ? Math.round(sudsM2) : 0;
 
   // ── Density honesty: flag when net density leaves the defensible band ──
   // ~19–25 dw/ha net fits the landscape-led SHELAA narrative; >25 contradicts it.
@@ -1025,10 +1213,24 @@ function updateStats() {
     }
   }
 
+  // ── SuDS summary (area per type) ──
+  const sudsSumEl = document.getElementById('sudsSummary');
+  if (sudsSumEl) {
+    if (!suds.length) {
+      sudsSumEl.textContent = 'No SuDS drawn yet.';
+    } else {
+      const tally = sudsSummary();
+      sudsSumEl.innerHTML = Object.keys(tally)
+        .map(k => `<div class="mix-row"><span>${k}</span><span>${Math.round(tally[k])} m²</span></div>`)
+        .join('');
+    }
+  }
+
   refreshEntranceUI();
   refreshUtilityUI();
   refreshRoadUI();
   refreshGenUI();
+  refreshSudsUI();
 }
 
 /* ── PROPERTIES PANEL ─────────────────────────────────────── */
@@ -1129,6 +1331,14 @@ canvas.addEventListener('click', e => {
     return;
   }
 
+  // Draw SuDS: append a polygon vertex, clamped to stay inside the boundary
+  if (drawingSuds) {
+    const p = pointInBoundary(w2.x, w2.y) ? { x: w2.x, y: w2.y } : nearestPointOnBoundary(w2.x, w2.y);
+    sudsDraft.push(p);
+    render();
+    return;
+  }
+
   // Move utility: SEWER/WATER snap to the boundary; ELEC places freely (off-site)
   if (movingUtility) {
     const which = movingUtility;
@@ -1183,12 +1393,14 @@ canvas.addEventListener('click', e => {
 
 canvas.addEventListener('dblclick', e => {
   if (drawingRoad) { finishRoad(); return; }
+  if (drawingSuds) { finishSuds(); return; }
   if (tool === 'site' && sitePts.length >= 3 && !siteClosed) {
     siteClosed = true;
     setDefaultAccessPoint();
     setDefaultUtilities();
     road = { pts: [], width: road.width }; drawingRoad = false; // new boundary → clear road
     dwellings = []; placedDwellings = 0;                        // new boundary → clear scheme
+    suds = []; sudsDraft = []; drawingSuds = false;             // new boundary → clear SuDS
     setTool('site');
     document.getElementById('hintBar').textContent = 'Site boundary closed — switch to Building tool';
     updateStats(); render();
@@ -1225,6 +1437,7 @@ document.addEventListener('keydown', e => {
   }
 
   if (e.key === 'Escape' && drawingRoad) { finishRoad(); return; }
+  if (e.key === 'Escape' && drawingSuds) { finishSuds(); return; }
   if ((e.key === 'Delete' || e.key === 'Backspace') && selected && document.activeElement === document.body) delSel();
   if (e.key === 'Escape') { selected = null; updateProps(); render(); }
   if (e.key === 'b') setTool('building');
@@ -1323,6 +1536,9 @@ function render() {
 
   // Heritage / Cuckoo Trail buffer bands (drawn over the boundary fill, under everything else)
   drawBuffers2d();
+
+  // Attenuation SuDS areas (drawn over the buffers, under the road + homes)
+  drawSuds2d();
 
   // Internal estate road (drawn over the boundary fill, under the access markers)
   drawRoad2d();
@@ -1751,6 +1967,7 @@ function build3d() {
     }
   });
 
+  addSuds3d(s3, cx, cz);
   addDwellings3d(s3, cx, cz);
   addRoad3d(s3, cx, cz);
   addEntrance3d(s3, cx, cz);
@@ -1768,6 +1985,7 @@ function clearAll() {
   if (!confirm('Clear everything?')) return;
   sitePts = []; siteClosed = false; buildings = []; selected = null;
   placedDwellings = 0; dwellings = [];
+  suds = []; sudsDraft = []; drawingSuds = false;
   accessPt = null; movingEntrance = false;
   utilities = { sewer: null, water: null, elec: null }; movingUtility = null;
   road = { pts: [], width: road.width }; drawingRoad = false;
@@ -1804,7 +2022,7 @@ function saveEditorProject() {
     created:     new Date().toISOString(),
     type:        'editor',
     stats:       { gfa, buildings: buildings.length, siteArea: sA, floors: buildings.length ? Math.max(...buildings.map(b => b.floors)) : 0 },
-    editorState: { sitePts, siteClosed, buildings, defW, defD, defF, accessPt, accessSplay, road, utilities, deductPct, dwellings, genParams }
+    editorState: { sitePts, siteClosed, buildings, defW, defD, defF, accessPt, accessSplay, road, utilities, deductPct, dwellings, genParams, suds }
   });
   showToast('Project saved!');
 }
@@ -2227,6 +2445,7 @@ function loadDXF(input) {
       setDefaultUtilities();   // utilities reset to surveyed defaults on re-import
       road = { pts: [], width: road.width }; drawingRoad = false; // new boundary → clear road
       dwellings = []; placedDwellings = 0;                        // new boundary → clear scheme
+      suds = []; sudsDraft = []; drawingSuds = false;             // new boundary → clear SuDS
       fitViewToBoundary(sitePts);
       updateStats();
       render();
@@ -2262,6 +2481,7 @@ function clearDXFBoundary() {
   sitePts    = [];
   siteClosed = false;
   placedDwellings = 0; dwellings = [];
+  suds = []; sudsDraft = []; drawingSuds = false;
   accessPt = null; movingEntrance = false;
   utilities = { sewer: null, water: null, elec: null }; movingUtility = null;
   road = { pts: [], width: road.width }; drawingRoad = false;
@@ -2312,6 +2532,9 @@ if (new URLSearchParams(window.location.search).get('load')) {
     placedDwellings = dwellings.length;
     if (saved.genParams) genParams = Object.assign(genParams, saved.genParams);
     syncGenUI();
+    // Attenuation SuDS
+    suds = saved.suds || [];
+    sudsId = suds.reduce((m, f) => Math.max(m, f.id || 0), 0) + 1;
     document.getElementById('dW').value = defW;
     document.getElementById('dD').value = defD;
     document.getElementById('dF').value = defF;
