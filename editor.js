@@ -650,11 +650,14 @@ function setDefaultUtilities() {
     if (mid.y > bestY) { bestY = mid.y; sewer = mid; }
   }
 
-  // WATER — boundary point on the frontage near the entrance (offset SE so it
-  // doesn't sit exactly on the entrance marker)
-  const water = accessPt
-    ? nearestPointOnBoundary(accessPt.x + 10, accessPt.y - 6)
-    : sewer;
+  // WATER — mains water along the EASTERN road frontage (Sayerland Lane): midpoint
+  // of the easternmost edge. Indicative default — verify against the OS plan.
+  let water = sewer, bestX = -Infinity;
+  for (let i = 0; i < sitePts.length; i++) {
+    const a = sitePts[i], b = sitePts[(i + 1) % sitePts.length];
+    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    if (mid.x > bestX) { bestX = mid.x; water = mid; }
+  }
 
   // ELEC — south-west vertex (lowest x+y), pushed outward from the centroid
   const cx = sitePts.reduce((s, p) => s + p.x, 0) / sitePts.length;
@@ -689,6 +692,108 @@ function refreshUtilityUI() {
     const b = document.getElementById('utilBtn_' + k);
     if (b) b.classList.toggle('active', movingUtility === k);
   });
+  const sBtn = document.getElementById('servicesBtn');
+  if (sBtn) {
+    sBtn.classList.toggle('active', showServices);
+    sBtn.textContent = showServices ? '⌁ Service runs: On' : '⌁ Service runs: Off';
+  }
+}
+
+/* ── SERVICE ROUTING ──────────────────────────────────────── */
+// Indicative service runs from each utility marker to the road/scheme, so the
+// site reads as serviceable without major off-site works (SHELAA §F4). Routes
+// are derived on the fly — not a designed drainage/utility layout.
+let showServices = true;
+
+// Nearest point on the road centreline to (x,y); falls back to the site centroid.
+function nearestRoadPoint(x, y) {
+  const c = roadCenterline();
+  if (c.length < 2) {
+    return {
+      x: sitePts.reduce((s, p) => s + p.x, 0) / sitePts.length,
+      y: sitePts.reduce((s, p) => s + p.y, 0) / sitePts.length,
+    };
+  }
+  let best = null, bestD = Infinity;
+  for (let i = 1; i < c.length; i++) {
+    const a = c[i - 1], b = c[i], dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy;
+    let t = len2 > 0 ? ((x - a.x) * dx + (y - a.y) * dy) / len2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    const fx = a.x + t * dx, fy = a.y + t * dy, d = Math.hypot(x - fx, y - fy);
+    if (d < bestD) { bestD = d; best = { x: fx, y: fy }; }
+  }
+  return best;
+}
+
+// One route per present utility marker.
+function serviceRoutes() {
+  const routes = [];
+  if (!siteClosed) return routes;
+  Object.keys(utilities).forEach(k => {
+    const u = utilities[k];
+    if (u) routes.push({ from: u, to: nearestRoadPoint(u.x, u.y), col: UTIL_COLS[k], key: k });
+  });
+  return routes;
+}
+
+function onToggleServices() {
+  showServices = !showServices;
+  refreshUtilityUI();
+  render();
+  if (view === '3d') build3d();
+}
+
+// 2D: dashed service runs from markers to the road, in each utility's colour.
+function drawServices2d() {
+  if (!showServices || !siteClosed) return;
+  ctx.save();
+  ctx.setLineDash([3, 3]);
+  serviceRoutes().forEach(r => {
+    const a = w2s(r.from.x, r.from.y), b = w2s(r.to.x, r.to.y);
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+    ctx.strokeStyle = r.col; ctx.lineWidth = 1.4; ctx.globalAlpha = 0.75; ctx.stroke();
+  });
+  ctx.restore();
+}
+
+// 3D: service runs as coloured ground lines.
+function addServices3d(scene, cx, cz) {
+  if (!showServices) return;
+  serviceRoutes().forEach(r => {
+    const pts = [
+      new THREE.Vector3(r.from.x - cx, 0.25, -(r.from.y - cz)),
+      new THREE.Vector3(r.to.x - cx,   0.25, -(r.to.y - cz)),
+    ];
+    scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
+      new THREE.LineBasicMaterial({ color: new THREE.Color(r.col) })));
+  });
+}
+
+// Seed a default attenuation pond near the eastern edge — the OS plan shows a
+// pond there, and it doubles as the heritage-edge landscape/water feature.
+function seedEasternPond() {
+  if (!siteClosed || sitePts.length < 3) { showToast('Load a boundary first'); return; }
+  const b = boundaryBounds();
+  const pts = [];
+  for (let x = b.xMin; x <= b.xMax; x += 4)
+    for (let y = b.yMin; y <= b.yMax; y += 4)
+      if (x > b.xMax - 45 && pointInBoundary(x, y) && distToBoundary(x, y) > 8) pts.push({ x, y });
+  if (pts.length < 4) { showToast('No room for an eastern pond'); return; }
+  const cxp = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+  const cyp = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+  const R = 14;
+  const poly = [];
+  for (let a = 0; a < 8; a++) {
+    const th = a / 8 * Math.PI * 2;
+    const p = { x: cxp + Math.cos(th) * R, y: cyp + Math.sin(th) * R * 0.8 };
+    if (pointInBoundary(p.x, p.y)) poly.push(p);
+  }
+  if (poly.length < 3) { showToast('No room for an eastern pond'); return; }
+  suds.push({ id: sudsId++, type: 'pond', pts: poly });
+  if (dwellings.length) generateScheme();
+  updateStats(); refreshSudsUI(); render();
+  if (view === '3d') build3d();
+  showToast('Eastern attenuation pond added — ' + Math.round(polyArea(poly)) + ' m²');
 }
 
 /* ── GENERATIVE LAYOUT ENGINE ─────────────────────────────── */
@@ -1688,6 +1793,9 @@ function render() {
     ctx.restore();
   }
 
+  // Service runs from utility markers to the road/scheme (under the markers)
+  drawServices2d();
+
   // Site utility markers (sewer / water / elec) — coloured squares + labels
   if (siteClosed) {
     Object.keys(utilities).forEach(k => {
@@ -2087,6 +2195,7 @@ function build3d() {
   addEntrance3d(s3, cx, cz);
   addAccessStub3d(s3, cx, cz);
   addUtilities3d(s3, cx, cz);
+  addServices3d(s3, cx, cz);
   updateStats(); // reflect placed dwelling count + density in the stats panel
 
   if (anim3) cancelAnimationFrame(anim3);
