@@ -57,6 +57,27 @@ const HOUSE_MIX = [
   ['bungalow2', 0.17],
   ['detached4', 0.15],
 ];
+// Hailsham Design Guidelines (Mar 2026) local vernacular palette — red brick,
+// pastel render, weatherboarding, hung clay tiles; red-clay or dark-slate roofs.
+// (HNDP_DGC.pdf Table 1 / vernacular section.) Colours are representative for
+// massing, not a materials specification.
+const WALL_MATERIALS = {
+  brick:        { label: 'Red brick',    color: 0xa8503c },
+  render:       { label: 'Pastel render',color: 0xe7e2d0 },
+  weatherboard: { label: 'Weatherboard', color: 0xcfc9b6 },
+  tilehung:     { label: 'Hung tiles',   color: 0x9c5646 },
+};
+const ROOF_MATERIALS = {
+  clay:  { label: 'Red clay',   color: 0x8a3b2a },
+  slate: { label: 'Dark slate', color: 0x3b4046 },
+};
+// Which wall/roof materials suit each house type (first is the default lead).
+const TYPE_MATERIALS = {
+  bungalow2: { walls: ['render', 'weatherboard'], roofs: ['slate', 'clay'] },
+  terrace2:  { walls: ['brick', 'tilehung'],      roofs: ['clay', 'slate'] },
+  semi3:     { walls: ['brick', 'render'],        roofs: ['clay', 'slate'] },
+  detached4: { walls: ['weatherboard', 'render'], roofs: ['slate', 'clay'] },
+};
 /* ── ATTENUATION SuDS ─────────────────────────────────────── */
 // Drawable sustainable-drainage areas. Weald Clay rules out soakaways, so every
 // type here is ATTENUATION-based (stores water, releases at a controlled rate).
@@ -80,6 +101,7 @@ let genParams = {
   bufferW:      12,  // m no-build landscape buffer on the WEST (Cuckoo Trail)
   boundaryInset: 6,  // m general no-build inset from the boundary line
   targetCount:  30,  // desired dwelling count; generator caps at what fits
+  solar:        true,// roof-integrated PV on the south-facing slopes
 };
 
 /* ── SITE ACCESS POINT ────────────────────────────────────── */
@@ -787,7 +809,8 @@ function placeAlongRoad(pattern) {
         if (footprintValid(cx, cy, hw, hd, t, n) && !overlapsPlaced(cx, cy, ty.w, ty.d) &&
             !out.some(o => Math.hypot(cx - o.cx, cy - o.cy) < (hw + o.w / 2) * 0.82)) {
           out.push({ cx, cy, w: ty.w, d: ty.d, rot: Math.atan2(t.y, t.x),
-                     type: key, beds: ty.beds, storeys: ty.storeys, color: ty.color });
+                     type: key, beds: ty.beds, storeys: ty.storeys, color: ty.color,
+                     frontX: -n.x * side, frontY: -n.y * side });
           const abut = (key === 'terrace2' && prevKey === 'terrace2');
           dist += ty.w + (abut ? 0 : genParams.sideGap);
           prevKey = key;
@@ -818,7 +841,8 @@ function placeGrid(pattern) {
       if (footprintValid(cx, cy, hw, hd, t, n) && !overlapsPlaced(cx, cy, ty.w, ty.d) &&
           !out.some(o => Math.hypot(cx - o.cx, cy - o.cy) < (hw + o.w / 2) * 0.82)) {
         out.push({ cx, cy, w: ty.w, d: ty.d, rot: 0,
-                   type: key, beds: ty.beds, storeys: ty.storeys, color: ty.color });
+                   type: key, beds: ty.beds, storeys: ty.storeys, color: ty.color,
+                   frontX: 0, frontY: -1 });
         sx += ty.w + genParams.sideGap;
       } else {
         sx += 3;
@@ -827,6 +851,17 @@ function placeGrid(pattern) {
     rowIdx++;
   }
   return out;
+}
+
+// Give each home a vernacular wall + roof material (deterministic by type/index
+// so a scheme looks the same each time it is regenerated). Stored on the
+// dwelling so 3D materials and any legend agree and persist.
+function assignAppearance(list) {
+  list.forEach((dw, i) => {
+    const tm = TYPE_MATERIALS[dw.type] || TYPE_MATERIALS.semi3;
+    dw.walls = tm.walls[i % tm.walls.length];
+    dw.roof  = tm.roofs[(i >> 1) % tm.roofs.length];
+  });
 }
 
 // Evenly thin a candidate list down to `target` so survivors spread across the
@@ -845,6 +880,7 @@ function generateScheme() {
   dwellings = []; // placeAlongRoad checks against `dwellings` via overlapsPlaced
   const candidates = roadCenterline().length >= 2 ? placeAlongRoad(pattern) : placeGrid(pattern);
   dwellings = thinToTarget(candidates, genParams.targetCount);
+  assignAppearance(dwellings);
   placedDwellings = dwellings.length;
 
   const lbl = document.getElementById('dwellingCountLabel');
@@ -869,6 +905,18 @@ function onTargetCount(v) {
   genParams.targetCount = +v;
   document.getElementById('dwellingCountLabel').textContent = v;
   if (siteClosed && sitePts.length >= 3) generateScheme();
+}
+
+// Sidebar: toggle roof-integrated PV. Affects the 3D model + solar-area stat.
+function onToggleSolar() {
+  genParams.solar = !genParams.solar;
+  const btn = document.getElementById('solarBtn');
+  if (btn) {
+    btn.classList.toggle('active', genParams.solar);
+    btn.textContent = genParams.solar ? '☀ Roof solar: On' : '☀ Roof solar: Off';
+  }
+  updateStats();
+  if (view === '3d') build3d();
 }
 
 // Sidebar: setback / buffer sliders — regenerate live so the effect is visible.
@@ -898,6 +946,11 @@ function syncGenUI() {
   set('setbackSlider', genParams.frontSetback); txt('setbackLabel', genParams.frontSetback + 'm');
   set('bufferESlider', genParams.bufferE);      txt('bufferELabel', genParams.bufferE + 'm');
   set('bufferWSlider', genParams.bufferW);      txt('bufferWLabel', genParams.bufferW + 'm');
+  const solarBtn = document.getElementById('solarBtn');
+  if (solarBtn) {
+    solarBtn.classList.toggle('active', genParams.solar);
+    solarBtn.textContent = genParams.solar ? '☀ Roof solar: On' : '☀ Roof solar: Off';
+  }
 }
 
 // 2D: translucent buffer bands so the heritage/landscape edges read on plan.
@@ -949,29 +1002,88 @@ function drawDwellings2d() {
   ctx.restore();
 }
 
-// 3D: simple pitched-roof houses per type, oriented to their road frontage.
+// Pitch rise for a house of the given footprint (≈35–40° roof).
+function houseRise(w, d) { return Math.min(w, d) * 0.32; }
+
+// Slope length (eave→ridge) and PV panel area for one home's south-facing roof.
+function houseSolarM2(dw) {
+  const rise = houseRise(dw.w, dw.d);
+  const slopeLen = Math.hypot(dw.d / 2, rise);
+  return dw.w * 0.8 * slopeLen * 0.68; // usable panel area on one slope
+}
+
+// Total roof-PV area across the scheme (0 when solar is off).
+function solarRoofM2() {
+  if (!genParams.solar) return 0;
+  return dwellings.reduce((s, dw) => s + houseSolarM2(dw), 0);
+}
+
+// 3D: one vernacular house — body, pitched roof, fenestration, chimney and
+// (optionally) roof-integrated PV on the south-facing slope. Oriented to the road.
+function addHouse3d(scene, dw, cx, cz) {
+  const eave = dw.storeys * 3;             // 3 m per storey to the eaves
+  const rise = houseRise(dw.w, dw.d);
+  const wallCol = (WALL_MATERIALS[dw.walls] || WALL_MATERIALS.brick).color;
+  const roofCol = (ROOF_MATERIALS[dw.roof] || ROOF_MATERIALS.clay).color;
+
+  const grp = new THREE.Group();
+  grp.position.set(dw.cx - cx, 0, -(dw.cy - cz));
+  grp.rotation.y = dw.rot;
+
+  const body = new THREE.Mesh(new THREE.BoxGeometry(dw.w, eave, dw.d),
+    new THREE.MeshLambertMaterial({ color: wallCol }));
+  body.position.y = eave / 2;
+  body.castShadow = true; body.receiveShadow = true;
+  grp.add(body);
+
+  const roof = new THREE.Mesh(makePitchedRoof(dw.w, dw.d, eave, rise),
+    new THREE.MeshLambertMaterial({ color: roofCol, side: THREE.DoubleSide }));
+  roof.castShadow = true;
+  grp.add(roof);
+
+  // Local +Z maps to the world direction (t.y, -t.x); pick the sign that faces the road.
+  const t = { x: Math.cos(dw.rot), y: Math.sin(dw.rot) };
+  const localZ = { x: t.y, y: -t.x };
+  const frontSign = ((dw.frontX || 0) * localZ.x + (dw.frontY || 0) * localZ.y) >= 0 ? 1 : -1;
+  const zFace = frontSign * (dw.d / 2 + 0.06);
+
+  const glassMat = new THREE.MeshLambertMaterial({ color: 0x2a2f36 });
+  const doorMat  = new THREE.MeshLambertMaterial({ color: 0x4a3524 });
+  const win = (px, py, ww, hh) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(ww, hh, 0.1), glassMat);
+    m.position.set(px, py, zFace); grp.add(m);
+  };
+  const door = new THREE.Mesh(new THREE.BoxGeometry(1.0, 2.1, 0.12), doorMat);
+  door.position.set(-dw.w * 0.28, 1.05, zFace); grp.add(door);
+  win(dw.w * 0.05, 1.3, 1.4, 1.3);
+  win(dw.w * 0.30, 1.3, 1.4, 1.3);
+  if (dw.storeys >= 2) {
+    win(-dw.w * 0.28, eave - 1.4, 1.2, 1.2);
+    win(dw.w * 0.05,  eave - 1.4, 1.2, 1.2);
+    win(dw.w * 0.30,  eave - 1.4, 1.2, 1.2);
+    const chim = new THREE.Mesh(new THREE.BoxGeometry(0.8, rise + 1.2, 0.8),
+      new THREE.MeshLambertMaterial({ color: wallCol }));
+    chim.position.set(dw.w * 0.32, eave + (rise + 1.2) / 2 - 0.2, dw.d * 0.15);
+    chim.castShadow = true; grp.add(chim);
+  }
+
+  // Roof PV on whichever slope faces south (world -y). Panel lies on the pitch.
+  if (genParams.solar) {
+    const pvSign = localZ.y < 0 ? 1 : -1; // +Z slope faces south when localZ.y < 0
+    const pitch  = Math.atan2(rise, dw.d / 2);
+    const slopeLen = Math.hypot(dw.d / 2, rise);
+    const pv = new THREE.Mesh(new THREE.BoxGeometry(dw.w * 0.8, 0.08, slopeLen * 0.68),
+      new THREE.MeshLambertMaterial({ color: 0x10233a }));
+    pv.position.set(0, eave + rise * 0.5 + 0.08, pvSign * (dw.d / 4));
+    pv.rotation.x = pvSign * -pitch;
+    grp.add(pv);
+  }
+
+  scene.add(grp);
+}
+
 function addDwellings3d(scene, cx, cz) {
-  if (!dwellings.length) return;
-  const ROOF_COL = 0x6e6458;
-  const roofMat  = new THREE.MeshLambertMaterial({ color: ROOF_COL, side: THREE.DoubleSide });
-  dwellings.forEach(dw => {
-    const eave = dw.storeys * 3; // 3m per storey to the eaves
-    const rise = 2;
-    const tx = dw.cx - cx, tz = -(dw.cy - cz);
-    const body = new THREE.Mesh(
-      new THREE.BoxGeometry(dw.w, eave, dw.d),
-      new THREE.MeshLambertMaterial({ color: new THREE.Color(dw.color) })
-    );
-    body.position.set(tx, eave / 2, tz);
-    body.rotation.y = dw.rot;
-    body.castShadow = true; body.receiveShadow = true;
-    scene.add(body);
-    const roof = new THREE.Mesh(makePitchedRoof(dw.w, dw.d, eave, rise), roofMat);
-    roof.position.set(tx, 0, tz);
-    roof.rotation.y = dw.rot;
-    roof.castShadow = true;
-    scene.add(roof);
-  });
+  dwellings.forEach(dw => addHouse3d(scene, dw, cx, cz));
 }
 
 // A compact housing-mix tally { 'label': count, ... } for the stats panel.
@@ -1191,6 +1303,8 @@ function updateStats() {
   document.getElementById('sRoad').textContent        = roadM2 > 0 ? Math.round(roadM2) : 0;
   const sudsEl = document.getElementById('sSuds');
   if (sudsEl) sudsEl.textContent = sudsM2 > 0 ? Math.round(sudsM2) : 0;
+  const solarEl = document.getElementById('sSolar');
+  if (solarEl) solarEl.textContent = Math.round(solarRoofM2());
 
   // ── Density honesty: flag when net density leaves the defensible band ──
   // ~19–25 dw/ha net fits the landscape-led SHELAA narrative; >25 contradicts it.

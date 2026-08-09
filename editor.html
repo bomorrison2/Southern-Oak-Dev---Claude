@@ -191,6 +191,7 @@
         <div class="stat-box"><div class="stat-val"       id="sSite">0</div><div class="stat-label">Site m²</div></div>
         <div class="stat-box"><div class="stat-val"       id="sRoad">0</div><div class="stat-label">Road m²</div></div>
         <div class="stat-box"><div class="stat-val"       id="sSuds">0</div><div class="stat-label">SuDS m²</div></div>
+        <div class="stat-box"><div class="stat-val"       id="sSolar">0</div><div class="stat-label">PV roof m²</div></div>
         <div class="stat-box"><div class="stat-val"       id="sBuild">0</div><div class="stat-label">Footprint m²</div></div>
         <div class="stat-box"><div class="stat-val green" id="sGFA">0</div><div class="stat-label">GFA m²</div></div>
         <div class="stat-box"><div class="stat-val"       id="sFAR">0.0</div><div class="stat-label">FAR</div></div>
@@ -283,8 +284,13 @@
         </div>
         <input type="range" class="slider" id="bufferWSlider"
                min="0" max="40" value="12" oninput="onGenParam('bufferW', this.value)"/>
+        <button class="preset-btn active" id="solarBtn" onclick="onToggleSolar()"
+                style="border-color:rgba(255,212,0,0.5);color:#ffe066;margin-top:8px">
+          ☀ Roof solar: On
+        </button>
         <div style="font-family:var(--mono);font-size:8px;color:var(--text-dimmer);margin-top:6px;line-height:1.5">
-          Homes front the road · E/W buffers kept clear · mix indicative, not a policy commitment
+          Homes front the road · E/W buffers kept clear · Hailsham vernacular (brick / render /
+          weatherboard / hung tile, clay / slate roofs). Mix + materials indicative, not a policy commitment.
         </div>
         <div class="sb-title" style="margin-top:12px">Housing mix</div>
         <div id="schemeMix" class="mix-list">No scheme generated yet.</div>
