@@ -81,6 +81,13 @@
     .hints { padding: 14px 18px; font-size: 10px; color: var(--text-dimmer); line-height: 1.9; }
     .kbd { display: inline-block; padding: 1px 5px; background: var(--bg4); border: 1px solid var(--line); font-family: var(--mono); font-size: 8px; color: var(--text-dim); }
 
+    /* Density-tension flag: net dw/ha above the defensible ~25 band turns amber */
+    .stat-val.warn { color: #ff8c00; }
+    /* Housing-mix tally */
+    .mix-list { display: flex; flex-direction: column; gap: 3px; }
+    .mix-row { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 9px; color: var(--text-dim); }
+    .mix-row span:last-child { color: var(--text); }
+
     /* CANVAS */
     .canvas-wrap { flex: 1; position: relative; overflow: hidden; background: var(--bg); }
     .canvas-wrap::before {
@@ -235,13 +242,50 @@
     </div>
 
     <div class="sb-section">
-      <div class="sb-title">Dwellings <span style="font-size:8px;opacity:0.45;letter-spacing:0">(3D view)</span></div>
-      <div class="ctrl-row">
-        <span class="ctrl-label">Target count</span>
-        <span class="ctrl-val" id="dwellingCountLabel">45</span>
+      <div class="sb-title">Generate Scheme</div>
+      <div id="genHint" style="font-size:10px;color:var(--text-dimmer);line-height:1.6">
+        Close or import a boundary first, then generate homes that front the road.
       </div>
-      <input type="range" class="slider" id="dwellingSlider"
-             min="30" max="60" value="45" oninput="onDwellingSlider()"/>
+      <!-- Shown only when a boundary exists (toggled by refreshGenUI) -->
+      <div class="pdf-controls" id="genControls" style="display:none">
+        <button class="preset-btn" id="genBtn" onclick="generateScheme()"
+                style="border-color:rgba(0,232,122,0.5);color:#4be08f">
+          ⚙ Generate scheme
+        </button>
+        <button class="preset-btn" onclick="clearScheme()"
+                style="border-color:rgba(255,80,80,0.2);color:rgba(255,100,100,0.6)">
+          ✕ Clear scheme
+        </button>
+        <div class="ctrl-row" style="margin-top:10px">
+          <span class="ctrl-label">Target homes</span>
+          <span class="ctrl-val" id="dwellingCountLabel">30</span>
+        </div>
+        <input type="range" class="slider" id="dwellingSlider"
+               min="10" max="60" value="30" oninput="onTargetCount(this.value)"/>
+        <div class="ctrl-row" style="margin-top:10px">
+          <span class="ctrl-label">Front setback</span>
+          <span class="ctrl-val" id="setbackLabel">6m</span>
+        </div>
+        <input type="range" class="slider" id="setbackSlider"
+               min="2" max="15" value="6" step="0.5" oninput="onGenParam('frontSetback', this.value)"/>
+        <div class="ctrl-row" style="margin-top:10px">
+          <span class="ctrl-label">Heritage buffer · E</span>
+          <span class="ctrl-val" id="bufferELabel">15m</span>
+        </div>
+        <input type="range" class="slider" id="bufferESlider"
+               min="0" max="40" value="15" oninput="onGenParam('bufferE', this.value)"/>
+        <div class="ctrl-row" style="margin-top:10px">
+          <span class="ctrl-label">Cuckoo Trail buffer · W</span>
+          <span class="ctrl-val" id="bufferWLabel">12m</span>
+        </div>
+        <input type="range" class="slider" id="bufferWSlider"
+               min="0" max="40" value="12" oninput="onGenParam('bufferW', this.value)"/>
+        <div style="font-family:var(--mono);font-size:8px;color:var(--text-dimmer);margin-top:6px;line-height:1.5">
+          Homes front the road · E/W buffers kept clear · mix indicative, not a policy commitment
+        </div>
+        <div class="sb-title" style="margin-top:12px">Housing mix</div>
+        <div id="schemeMix" class="mix-list">No scheme generated yet.</div>
+      </div>
     </div>
 
     <div class="sb-section">

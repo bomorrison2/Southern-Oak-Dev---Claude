@@ -30,6 +30,43 @@ let dwellingCount = 45;
 let placedDwellings = 0; // actual dwellings placed inside the boundary (3D massing)
 let deductPct = 25;      // SuDS / open-space % of gross (roads measured separately from geometry)
 
+/* ── GENERATIVE LAYOUT ────────────────────────────────────── */
+// `dwellings` are the homes produced by generateScheme() — plots that front the
+// road, respect the buffers, and carry a house type. Distinct from the free-form
+// `buildings` array (manual massing blocks), which is left untouched.
+// Each dwelling: { id, cx, cy, w, d, rot, type, beds, storeys, color }
+//   cx,cy  = plot/footprint centre in site world coords (same space as sitePts)
+//   w      = frontage width (along the road tangent), d = depth (toward the road)
+//   rot    = footprint rotation, radians, measured like atan2(dy,dx) of the tangent
+let dwellings = [];
+
+// Modular-appropriate house types for a 30–60 unit Hailsham scheme. Sizes are
+// indicative footprints (metres) for massing/estimation — NOT a fixed schedule.
+// beds/mix are the app's generation DEFAULTS, adjustable; not a policy commitment.
+const HOUSE_TYPES = {
+  bungalow2: { label: '2-bed bungalow', beds: 2, w: 11, d: 8,  storeys: 1, color: '#5aa9e6' },
+  terrace2:  { label: '2-bed terrace',  beds: 2, w: 6,  d: 9,  storeys: 2, color: '#00d4ff' },
+  semi3:     { label: '3-bed semi',     beds: 3, w: 8,  d: 9,  storeys: 2, color: '#00e87a' },
+  detached4: { label: '4-bed detached', beds: 4, w: 10, d: 10, storeys: 2, color: '#ff8c00' },
+};
+// Weighted mix — majority 1–3 bed with a small larger-family share, per Ray's
+// 08/07/2026 working position (no 5–6 bed; bungalows/accessible included).
+const HOUSE_MIX = [
+  ['terrace2',  0.32],
+  ['semi3',     0.36],
+  ['bungalow2', 0.17],
+  ['detached4', 0.15],
+];
+// Generation parameters (adjustable in the sidebar).
+let genParams = {
+  frontSetback: 6,   // m from carriageway edge to the house front (front garden)
+  sideGap:      2.5, // m between adjacent detached/semi units
+  bufferE:      15,  // m no-build heritage buffer on the EAST (Sayerlands House)
+  bufferW:      12,  // m no-build landscape buffer on the WEST (Cuckoo Trail)
+  boundaryInset: 6,  // m general no-build inset from the boundary line
+  targetCount:  30,  // desired dwelling count; generator caps at what fits
+};
+
 /* ── SITE ACCESS POINT ────────────────────────────────────── */
 // accessPt: {x,y} in centroid-relative world coords (same space as sitePts), or null.
 // First step toward a road layout — entrance marker only, no road generation yet.
@@ -348,6 +385,7 @@ function finishRoad() {
   document.getElementById('hintBar').textContent = road.pts.length ? 'Road drawn' : 'Road cleared';
   updateStats(); refreshRoadUI(); render();
   if (view === '3d') build3d();
+  if (dwellings.length) generateScheme(); // homes re-front the updated road
 }
 
 function clearRoad() {
@@ -355,6 +393,7 @@ function clearRoad() {
   drawingRoad = false;
   updateStats(); refreshRoadUI(); render();
   if (view === '3d') build3d();
+  if (dwellings.length) generateScheme(); // fall back to the buffer-aware grid
 }
 
 function onRoadWidth(v) {
@@ -615,6 +654,320 @@ function refreshUtilityUI() {
   });
 }
 
+/* ── GENERATIVE LAYOUT ENGINE ─────────────────────────────── */
+// Turns the boundary + access + drawn road into a coherent scheme of homes that
+// front the carriageway, sit behind proper setbacks, keep clear of the eastern
+// heritage buffer (Sayerlands House) and western Cuckoo Trail buffer, and land
+// at a defensible density. Homes are massing at this stage — Increment 3 gives
+// them real modular house types, roofs and materials.
+
+// Axis-aligned bounds of the boundary (site world coords). East is +x, north +y.
+function boundaryBounds() {
+  const xs = sitePts.map(p => p.x), ys = sitePts.map(p => p.y);
+  return { xMin: Math.min(...xs), xMax: Math.max(...xs), yMin: Math.min(...ys), yMax: Math.max(...ys) };
+}
+
+// Shortest distance from (px,py) to the boundary polygon edges.
+function distToBoundary(px, py) {
+  let best = Infinity;
+  for (let i = 0; i < sitePts.length; i++) {
+    const a = sitePts[i], b = sitePts[(i + 1) % sitePts.length];
+    const dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy;
+    let t = len2 > 0 ? ((px - a.x) * dx + (py - a.y) * dy) / len2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    const fx = a.x + t * dx, fy = a.y + t * dy;
+    const d = Math.hypot(px - fx, py - fy);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+// Shortest distance from (px,py) to the road centreline (Infinity if no road).
+function distToRoadCentre(px, py) {
+  const c = roadCenterline();
+  if (c.length < 2) return Infinity;
+  let best = Infinity;
+  for (let i = 1; i < c.length; i++) {
+    const a = c[i - 1], b = c[i];
+    const dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy;
+    let t = len2 > 0 ? ((px - a.x) * dx + (py - a.y) * dy) / len2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    const fx = a.x + t * dx, fy = a.y + t * dy;
+    const d = Math.hypot(px - fx, py - fy);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+// The four corners of an oriented footprint centred at (cx,cy).
+// t = unit tangent (frontage axis), n = unit normal (depth axis).
+function footprintCorners(cx, cy, hw, hd, t, n) {
+  return [
+    { x: cx + t.x * hw + n.x * hd, y: cy + t.y * hw + n.y * hd },
+    { x: cx + t.x * hw - n.x * hd, y: cy + t.y * hw - n.y * hd },
+    { x: cx - t.x * hw + n.x * hd, y: cy - t.y * hw + n.y * hd },
+    { x: cx - t.x * hw - n.x * hd, y: cy - t.y * hw - n.y * hd },
+  ];
+}
+
+// A candidate footprint is valid if every corner is inside the boundary, clear
+// of the boundary line by boundaryInset, outside both buffers, and off the
+// carriageway. Buffers are x-bands (east = +x, west = -x).
+function footprintValid(cx, cy, hw, hd, t, n) {
+  const b = boundaryBounds();
+  const roadClear = road.width / 2 + 0.5; // keep the whole footprint off the carriageway
+  for (const c of footprintCorners(cx, cy, hw, hd, t, n)) {
+    if (!pointInBoundary(c.x, c.y)) return false;
+    if (distToBoundary(c.x, c.y) < genParams.boundaryInset) return false;
+    if (c.x > b.xMax - genParams.bufferE) return false; // eastern heritage buffer
+    if (c.x < b.xMin + genParams.bufferW) return false; // western Cuckoo Trail buffer
+  }
+  if (distToRoadCentre(cx, cy) < roadClear) return false;
+  return true;
+}
+
+// Reject a new plot that collides with an already-placed one (bounding circles).
+function overlapsPlaced(cx, cy, w, d) {
+  const r = 0.5 * Math.hypot(w, d);
+  for (const dw of dwellings) {
+    const rr = 0.5 * Math.hypot(dw.w, dw.d);
+    if (Math.hypot(cx - dw.cx, cy - dw.cy) < (r + rr) * 0.82) return true;
+  }
+  return false;
+}
+
+// Expand the weighted HOUSE_MIX into a repeating type pattern (length ~24) so
+// attempts sample the mix in proportion.
+function buildMixPattern() {
+  const pat = [];
+  HOUSE_MIX.forEach(([key, wt]) => { for (let i = 0; i < Math.round(wt * 24); i++) pat.push(key); });
+  return pat.length ? pat : ['semi3'];
+}
+
+// Place homes fronting BOTH sides of every road segment, packed along the
+// frontage at each type's width. Returns candidate dwellings (unthinned).
+function placeAlongRoad(pattern) {
+  const path = roadCenterline();
+  const out = [];
+  let attempt = 0;
+  for (let i = 1; i < path.length; i++) {
+    const a = path[i - 1], b = path[i];
+    const segLen = Math.hypot(b.x - a.x, b.y - a.y);
+    if (segLen < 6) continue;
+    const t = { x: (b.x - a.x) / segLen, y: (b.y - a.y) / segLen }; // tangent
+    const n = { x: -t.y, y: t.x };                                   // left normal
+    for (const side of [1, -1]) {
+      let dist = 4;             // lead-in from the segment start
+      let prevKey = null;
+      let guard = 0;
+      while (dist < segLen - 4 && guard++ < 400) {
+        const key = pattern[attempt++ % pattern.length];
+        const ty = HOUSE_TYPES[key];
+        const hw = ty.w / 2, hd = ty.d / 2;
+        const along = dist + hw;
+        const bx = a.x + t.x * along, by = a.y + t.y * along;
+        const off = road.width / 2 + genParams.frontSetback + hd;
+        const cx = bx + n.x * side * off, cy = by + n.y * side * off;
+        if (footprintValid(cx, cy, hw, hd, t, n) && !overlapsPlaced(cx, cy, ty.w, ty.d) &&
+            !out.some(o => Math.hypot(cx - o.cx, cy - o.cy) < (hw + o.w / 2) * 0.82)) {
+          out.push({ cx, cy, w: ty.w, d: ty.d, rot: Math.atan2(t.y, t.x),
+                     type: key, beds: ty.beds, storeys: ty.storeys, color: ty.color });
+          const abut = (key === 'terrace2' && prevKey === 'terrace2');
+          dist += ty.w + (abut ? 0 : genParams.sideGap);
+          prevKey = key;
+        } else {
+          dist += 3; prevKey = null; // nudge forward and retry
+        }
+      }
+    }
+  }
+  return out;
+}
+
+// Fallback when no road is drawn: a buffer-aware grid so the tool still produces
+// a scheme. Rows run east–west; homes face south.
+function placeGrid(pattern) {
+  const b = boundaryBounds();
+  const out = [];
+  const t = { x: 1, y: 0 }, n = { x: 0, y: 1 };
+  const ROW_STEP = 20;
+  let attempt = 0, rowIdx = 0;
+  for (let sy = b.yMin + 8; sy <= b.yMax - 8; sy += ROW_STEP) {
+    let sx = b.xMin + 8, guard = 0;
+    while (sx <= b.xMax - 8 && guard++ < 200) {
+      const key = pattern[attempt++ % pattern.length];
+      const ty = HOUSE_TYPES[key];
+      const hw = ty.w / 2, hd = ty.d / 2;
+      const cx = sx + hw, cy = sy + hd;
+      if (footprintValid(cx, cy, hw, hd, t, n) && !overlapsPlaced(cx, cy, ty.w, ty.d) &&
+          !out.some(o => Math.hypot(cx - o.cx, cy - o.cy) < (hw + o.w / 2) * 0.82)) {
+        out.push({ cx, cy, w: ty.w, d: ty.d, rot: 0,
+                   type: key, beds: ty.beds, storeys: ty.storeys, color: ty.color });
+        sx += ty.w + genParams.sideGap;
+      } else {
+        sx += 3;
+      }
+    }
+    rowIdx++;
+  }
+  return out;
+}
+
+// Evenly thin a candidate list down to `target` so survivors spread across the
+// whole frontage rather than clustering at the start.
+function thinToTarget(list, target) {
+  if (list.length <= target) return list;
+  const kept = [], stride = list.length / target;
+  for (let i = 0; i < target; i++) kept.push(list[Math.floor(i * stride)]);
+  return kept;
+}
+
+// MAIN ENTRY — build the scheme from the current boundary/access/road.
+function generateScheme() {
+  if (!siteClosed || sitePts.length < 3) { showToast('Close a site boundary first'); return; }
+  const pattern = buildMixPattern();
+  dwellings = []; // placeAlongRoad checks against `dwellings` via overlapsPlaced
+  const candidates = roadCenterline().length >= 2 ? placeAlongRoad(pattern) : placeGrid(pattern);
+  dwellings = thinToTarget(candidates, genParams.targetCount);
+  placedDwellings = dwellings.length;
+
+  const lbl = document.getElementById('dwellingCountLabel');
+  if (lbl) lbl.textContent = genParams.targetCount;
+  updateStats();
+  render();
+  if (view === '3d') build3d();
+  const hasRoad = roadCenterline().length >= 2;
+  showToast(`Generated ${dwellings.length} homes` + (hasRoad ? ' fronting the road' : ' (draw a road for frontages)'));
+}
+
+function clearScheme() {
+  dwellings = [];
+  placedDwellings = 0;
+  updateStats(); render();
+  if (view === '3d') build3d();
+  showToast('Scheme cleared');
+}
+
+// Sidebar: target-count slider drives the generator.
+function onTargetCount(v) {
+  genParams.targetCount = +v;
+  document.getElementById('dwellingCountLabel').textContent = v;
+  if (siteClosed && sitePts.length >= 3) generateScheme();
+}
+
+// Sidebar: setback / buffer sliders — regenerate live so the effect is visible.
+function onGenParam(which, v) {
+  genParams[which] = +v;
+  const labels = { frontSetback: 'setbackLabel', bufferE: 'bufferELabel', bufferW: 'bufferWLabel' };
+  const el = document.getElementById(labels[which]);
+  if (el) el.textContent = v + 'm';
+  if (siteClosed && sitePts.length >= 3 && dwellings.length) generateScheme();
+}
+
+// Show the Generate controls only when a boundary exists.
+function refreshGenUI() {
+  const ctrls = document.getElementById('genControls');
+  const hint  = document.getElementById('genHint');
+  if (!ctrls) return;
+  const ready = siteClosed && sitePts.length >= 3;
+  ctrls.style.display = ready ? 'flex' : 'none';
+  if (hint) hint.style.display = ready ? 'none' : 'block';
+}
+
+// Push genParams into the sidebar controls (used after loading a saved project).
+function syncGenUI() {
+  const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
+  const txt = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+  set('dwellingSlider', genParams.targetCount); txt('dwellingCountLabel', genParams.targetCount);
+  set('setbackSlider', genParams.frontSetback); txt('setbackLabel', genParams.frontSetback + 'm');
+  set('bufferESlider', genParams.bufferE);      txt('bufferELabel', genParams.bufferE + 'm');
+  set('bufferWSlider', genParams.bufferW);      txt('bufferWLabel', genParams.bufferW + 'm');
+}
+
+// 2D: translucent buffer bands so the heritage/landscape edges read on plan.
+function drawBuffers2d() {
+  if (!siteClosed || sitePts.length < 3) return;
+  const b = boundaryBounds();
+  const bands = [
+    { x0: b.xMax - genParams.bufferE, x1: b.xMax, col: 'rgba(168,85,247,0.10)', label: 'Heritage buffer (E)' },
+    { x0: b.xMin, x1: b.xMin + genParams.bufferW, col: 'rgba(0,232,122,0.10)', label: 'Cuckoo Trail buffer (W)' },
+  ];
+  ctx.save();
+  // Clip to the boundary so bands don't bleed outside the site
+  ctx.beginPath();
+  const s0 = w2s(sitePts[0].x, sitePts[0].y);
+  ctx.moveTo(s0.x, s0.y);
+  for (let i = 1; i < sitePts.length; i++) { const s = w2s(sitePts[i].x, sitePts[i].y); ctx.lineTo(s.x, s.y); }
+  ctx.closePath();
+  ctx.clip();
+  bands.forEach(bd => {
+    if (bd.x1 <= bd.x0) return;
+    const tl = w2s(bd.x0, b.yMax), br = w2s(bd.x1, b.yMin);
+    ctx.fillStyle = bd.col;
+    ctx.fillRect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
+  });
+  ctx.restore();
+}
+
+// 2D: each generated home as an oriented footprint in its type colour.
+function drawDwellings2d() {
+  if (!dwellings.length) return;
+  ctx.save();
+  dwellings.forEach(dw => {
+    const t = { x: Math.cos(dw.rot), y: Math.sin(dw.rot) };
+    const n = { x: -Math.sin(dw.rot), y: Math.cos(dw.rot) };
+    const cs = footprintCorners(dw.cx, dw.cy, dw.w / 2, dw.d / 2, t, n).map(c => w2s(c.x, c.y));
+    // corners order: [+t+n, +t-n, -t+n, -t-n] → draw as quad +t+n, +t-n, -t-n, -t+n
+    ctx.beginPath();
+    ctx.moveTo(cs[0].x, cs[0].y);
+    ctx.lineTo(cs[1].x, cs[1].y);
+    ctx.lineTo(cs[3].x, cs[3].y);
+    ctx.lineTo(cs[2].x, cs[2].y);
+    ctx.closePath();
+    ctx.fillStyle   = dw.color + '30';
+    ctx.strokeStyle = dw.color;
+    ctx.lineWidth   = 1.2;
+    ctx.fill();
+    ctx.stroke();
+  });
+  ctx.restore();
+}
+
+// 3D: simple pitched-roof houses per type, oriented to their road frontage.
+function addDwellings3d(scene, cx, cz) {
+  if (!dwellings.length) return;
+  const ROOF_COL = 0x6e6458;
+  const roofMat  = new THREE.MeshLambertMaterial({ color: ROOF_COL, side: THREE.DoubleSide });
+  dwellings.forEach(dw => {
+    const eave = dw.storeys * 3; // 3m per storey to the eaves
+    const rise = 2;
+    const tx = dw.cx - cx, tz = -(dw.cy - cz);
+    const body = new THREE.Mesh(
+      new THREE.BoxGeometry(dw.w, eave, dw.d),
+      new THREE.MeshLambertMaterial({ color: new THREE.Color(dw.color) })
+    );
+    body.position.set(tx, eave / 2, tz);
+    body.rotation.y = dw.rot;
+    body.castShadow = true; body.receiveShadow = true;
+    scene.add(body);
+    const roof = new THREE.Mesh(makePitchedRoof(dw.w, dw.d, eave, rise), roofMat);
+    roof.position.set(tx, 0, tz);
+    roof.rotation.y = dw.rot;
+    roof.castShadow = true;
+    scene.add(roof);
+  });
+}
+
+// A compact housing-mix tally { 'label': count, ... } for the stats panel.
+function schemeMix() {
+  const tally = {};
+  dwellings.forEach(dw => {
+    const label = HOUSE_TYPES[dw.type] ? HOUSE_TYPES[dw.type].label : dw.type;
+    tally[label] = (tally[label] || 0) + 1;
+  });
+  return tally;
+}
+
 /* ── STATS ────────────────────────────────────────────────── */
 function updateStats() {
   const sA  = siteClosed && sitePts.length >= 3 ? polyArea(sitePts) : 0;
@@ -651,9 +1004,31 @@ function updateStats() {
   document.getElementById('sDensityGross').textContent = densGross > 0 ? densGross.toFixed(1) : '0';
   document.getElementById('sRoad').textContent        = roadM2 > 0 ? Math.round(roadM2) : 0;
 
+  // ── Density honesty: flag when net density leaves the defensible band ──
+  // ~19–25 dw/ha net fits the landscape-led SHELAA narrative; >25 contradicts it.
+  const densEl = document.getElementById('sDensity');
+  if (densEl) {
+    densEl.classList.remove('warn');
+    if (densNet > 25) densEl.classList.add('warn');
+  }
+
+  // ── Housing-mix tally for the generated scheme ──
+  const mixEl = document.getElementById('schemeMix');
+  if (mixEl) {
+    if (!dwellings.length) {
+      mixEl.textContent = 'No scheme generated yet.';
+    } else {
+      const tally = schemeMix();
+      mixEl.innerHTML = Object.keys(tally)
+        .map(k => `<div class="mix-row"><span>${k}</span><span>${tally[k]}</span></div>`)
+        .join('');
+    }
+  }
+
   refreshEntranceUI();
   refreshUtilityUI();
   refreshRoadUI();
+  refreshGenUI();
 }
 
 /* ── PROPERTIES PANEL ─────────────────────────────────────── */
@@ -813,6 +1188,7 @@ canvas.addEventListener('dblclick', e => {
     setDefaultAccessPoint();
     setDefaultUtilities();
     road = { pts: [], width: road.width }; drawingRoad = false; // new boundary → clear road
+    dwellings = []; placedDwellings = 0;                        // new boundary → clear scheme
     setTool('site');
     document.getElementById('hintBar').textContent = 'Site boundary closed — switch to Building tool';
     updateStats(); render();
@@ -945,8 +1321,14 @@ function render() {
     }
   }
 
+  // Heritage / Cuckoo Trail buffer bands (drawn over the boundary fill, under everything else)
+  drawBuffers2d();
+
   // Internal estate road (drawn over the boundary fill, under the access markers)
   drawRoad2d();
+
+  // Generated homes — drawn over the road so frontages read clearly
+  drawDwellings2d();
 
   // Access stub / visibility splay (drawn under the entrance marker)
   drawAccessStub();
@@ -1094,13 +1476,6 @@ function render() {
   });
 }
 
-/* ── DWELLING SLIDER ──────────────────────────────────────── */
-function onDwellingSlider() {
-  dwellingCount = +document.getElementById('dwellingSlider').value;
-  document.getElementById('dwellingCountLabel').textContent = dwellingCount;
-  if (view === '3d') build3d();
-}
-
 /* ── NET DEVELOPABLE AREA SLIDER ──────────────────────────── */
 function onDeductSlider() {
   deductPct = +document.getElementById('deductSlider').value;
@@ -1133,106 +1508,6 @@ function makePitchedRoof(w, d, eave, rise) {
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   geo.computeVertexNormals();
   return geo;
-}
-
-// Lays out simple dwelling massing inside the site boundary.
-// Houses are 8×10m footprint, 6m to eaves, pitched roof (+2m ridge).
-// Rows mix terraced (joined on the short side) and detached (gaps).
-// Every footprint is fully contained in the boundary (all four corners tested),
-// candidates are gathered across the whole site, then evenly thinned to the
-// target count so they spread across the entire developable area.
-// sitePts are centroid-relative world coords; cx/cz are the Three.js centroid offsets.
-function buildDwellingMassing(scene, sitePts, cx, cz, count) {
-  placedDwellings = 0; // reset; stays 0 on any early return (no/invalid boundary)
-  if (!sitePts || sitePts.length < 3 || !siteClosed) return;
-
-  // ── Fixed domestic proportions ──
-  const DW = 8, DD = 10, EAVE = 6, RISE = 2; // 8×10m footprint, 6m to eaves
-  const GAP = 3;        // side gap between detached units
-  const INSET = 8;      // keep all geometry clear of the boundary line
-  const ROW_STEP = 20;  // row centre-to-centre (house depth + front/back gardens)
-
-  const xs = sitePts.map(p => p.x);
-  const ys = sitePts.map(p => p.y);
-  const xMin = Math.min(...xs) + INSET, xMax = Math.max(...xs) - INSET;
-  const yMin = Math.min(...ys) + INSET, yMax = Math.max(...ys) - INSET;
-  if (xMax - xMin < DW || yMax - yMin < DD) return;
-
-  // Ray-casting point-in-polygon in world (site) coords
-  function inSite(px, py) {
-    let inside = false;
-    for (let i = 0, j = sitePts.length - 1; i < sitePts.length; j = i++) {
-      const xi = sitePts[i].x, yi = sitePts[i].y;
-      const xj = sitePts[j].x, yj = sitePts[j].y;
-      if (((yi > py) !== (yj > py)) && px < (xj - xi) * (py - yi) / (yj - yi) + xi) {
-        inside = !inside;
-      }
-    }
-    return inside;
-  }
-
-  // A footprint is valid only if all four corners sit inside the boundary
-  function footprintInside(px, py) {
-    const hw = DW / 2, hd = DD / 2;
-    return inSite(px - hw, py - hd) && inSite(px + hw, py - hd) &&
-           inSite(px + hw, py + hd) && inSite(px - hw, py + hd);
-  }
-
-  // ── Gather candidate slots across the ENTIRE boundary extent ──
-  const candidates = [];
-  let rowIdx = 0;
-  for (let sy = yMin + DD / 2; sy <= yMax - DD / 2; sy += ROW_STEP) {
-    // Pattern: terrace, terrace, detached — repeating
-    const isTerrace = (rowIdx % 3 !== 2);
-    const unitStep  = isTerrace ? DW : DW + GAP;
-    for (let sx = xMin + DW / 2; sx <= xMax - DW / 2; sx += unitStep) {
-      if (footprintInside(sx, sy)) candidates.push({ sx, sy, rowIdx });
-    }
-    rowIdx++;
-  }
-
-  // ── Choose up to `count`, spread evenly across the whole site ──
-  const target = Math.min(count, candidates.length);
-  let chosen;
-  if (candidates.length <= target) {
-    chosen = candidates;
-  } else {
-    chosen = [];
-    const stride = candidates.length / target;
-    for (let i = 0; i < target; i++) chosen.push(candidates[Math.floor(i * stride)]);
-  }
-
-  // ── Shared geometry / materials ──
-  const WALL_COLS = [0xc4a882, 0xb89474, 0xcfb99a, 0xbcaa8c];
-  const ROOF_COL  = 0x6e6458;
-  const roofGeo  = makePitchedRoof(DW, DD, EAVE, RISE);
-  const roofMat  = new THREE.MeshLambertMaterial({ color: ROOF_COL, side: THREE.DoubleSide });
-  const bodyGeo  = new THREE.BoxGeometry(DW, EAVE, DD);
-  const wallMats = WALL_COLS.map(c => new THREE.MeshLambertMaterial({ color: c }));
-
-  chosen.forEach(c => {
-    // Convert site world coords → Three.js scene coords
-    const tx = c.sx - cx;
-    const tz = -(c.sy - cz);
-    const wallMat = wallMats[c.rowIdx % wallMats.length];
-
-    const body = new THREE.Mesh(bodyGeo, wallMat);
-    body.position.set(tx, EAVE / 2, tz);
-    body.castShadow    = true;
-    body.receiveShadow = true;
-    scene.add(body);
-
-    const roof = new THREE.Mesh(roofGeo, roofMat);
-    roof.position.set(tx, 0, tz);
-    roof.castShadow    = true;
-    roof.receiveShadow = true;
-    scene.add(roof);
-  });
-
-  // Live count reflects what was actually placed inside the boundary
-  placedDwellings = chosen.length;
-  const lbl = document.getElementById('dwellingCountLabel');
-  if (lbl) lbl.textContent = chosen.length;
 }
 
 // Adds the entrance marker to the 3D scene: a vertical amber post + flag, with
@@ -1476,7 +1751,7 @@ function build3d() {
     }
   });
 
-  buildDwellingMassing(s3, sitePts, cx, cz, dwellingCount);
+  addDwellings3d(s3, cx, cz);
   addRoad3d(s3, cx, cz);
   addEntrance3d(s3, cx, cz);
   addAccessStub3d(s3, cx, cz);
@@ -1492,7 +1767,7 @@ function build3d() {
 function clearAll() {
   if (!confirm('Clear everything?')) return;
   sitePts = []; siteClosed = false; buildings = []; selected = null;
-  placedDwellings = 0;
+  placedDwellings = 0; dwellings = [];
   accessPt = null; movingEntrance = false;
   utilities = { sewer: null, water: null, elec: null }; movingUtility = null;
   road = { pts: [], width: road.width }; drawingRoad = false;
@@ -1529,7 +1804,7 @@ function saveEditorProject() {
     created:     new Date().toISOString(),
     type:        'editor',
     stats:       { gfa, buildings: buildings.length, siteArea: sA, floors: buildings.length ? Math.max(...buildings.map(b => b.floors)) : 0 },
-    editorState: { sitePts, siteClosed, buildings, defW, defD, defF, accessPt, accessSplay, road, utilities, deductPct }
+    editorState: { sitePts, siteClosed, buildings, defW, defD, defF, accessPt, accessSplay, road, utilities, deductPct, dwellings, genParams }
   });
   showToast('Project saved!');
 }
@@ -1951,11 +2226,13 @@ function loadDXF(input) {
       setDefaultAccessPoint(); // entrance defaults to the new southern tip
       setDefaultUtilities();   // utilities reset to surveyed defaults on re-import
       road = { pts: [], width: road.width }; drawingRoad = false; // new boundary → clear road
+      dwellings = []; placedDwellings = 0;                        // new boundary → clear scheme
       fitViewToBoundary(sitePts);
       updateStats();
       render();
       if (view === '3d') build3d(); // refresh 3D so it tracks the imported boundary
       alignPdfToDxf();              // snap an already-georeferenced PDF under the boundary
+      generateScheme();             // seed a buffer-aware scheme (grid until a road is drawn)
       if (DIAG_ACCESS) runAccessDiagnostic(); // TEMP one-off measurement (console)
 
       const areaHa = (polyArea(sitePts) / 10000).toFixed(2);
@@ -1984,7 +2261,7 @@ function loadDXF(input) {
 function clearDXFBoundary() {
   sitePts    = [];
   siteClosed = false;
-  placedDwellings = 0;
+  placedDwellings = 0; dwellings = [];
   accessPt = null; movingEntrance = false;
   utilities = { sewer: null, water: null, elec: null }; movingUtility = null;
   road = { pts: [], width: road.width }; drawingRoad = false;
@@ -2030,6 +2307,11 @@ if (new URLSearchParams(window.location.search).get('load')) {
     deductPct = (typeof saved.deductPct === 'number') ? saved.deductPct : 25;
     document.getElementById('deductSlider').value      = deductPct;
     document.getElementById('deductPctLabel').textContent = deductPct + '%';
+    // Generated scheme + parameters
+    dwellings = saved.dwellings || [];
+    placedDwellings = dwellings.length;
+    if (saved.genParams) genParams = Object.assign(genParams, saved.genParams);
+    syncGenUI();
     document.getElementById('dW').value = defW;
     document.getElementById('dD').value = defD;
     document.getElementById('dF').value = defF;
@@ -2044,8 +2326,9 @@ if (new URLSearchParams(window.location.search).get('load')) {
     siteClosed = true;
     setDefaultAccessPoint();
     setDefaultUtilities();
-    document.getElementById('hintBar').textContent = 'Demo site loaded — use Building tool to place blocks';
+    document.getElementById('hintBar').textContent = 'Demo site loaded — Generate a scheme, or draw a road first';
     updateStats(); render();
-    showToast('Demo site loaded — try placing some buildings!');
+    generateScheme(); // show a generated scheme immediately on first open
+    showToast('Demo scheme generated — draw a road, then Generate again');
   }, 300);
 }
