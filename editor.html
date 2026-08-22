@@ -151,6 +151,19 @@
     .pdf-status.loaded     { color: var(--cyan); }
     .pdf-status.calibrated { color: var(--green); }
     .pdf-controls { display: none; flex-direction: column; gap: 6px; margin-top: 10px; }
+
+    /* ── Readability: slightly larger UI text (overrides above) ──────── */
+    .tool-btn, .view-btn        { font-size: 11px; }
+    .sb-title, .rp-title        { font-size: 11px; }
+    .stat-val                   { font-size: 22px; }
+    .stat-label                 { font-size: 9px; }
+    .layer-name, .ctrl-label,
+    .ctrl-val, .prop-l, .prop-v,
+    .no-sel                     { font-size: 12px; }
+    .layer-count                { font-size: 10px; }
+    .preset-btn                 { font-size: 10px; }
+    .hints, .mix-row            { font-size: 11px; }
+    .pdf-status                 { font-size: 10px; }
   </style>
 </head>
 <body>
@@ -168,6 +181,11 @@
     <div class="view-toggle">
       <button class="view-btn active" id="btn2d" onclick="setView('2d')">2D Plan</button>
       <button class="view-btn"        id="btn3d" onclick="setView('3d')">3D View</button>
+    </div>
+    <div class="view-toggle" title="3D presentation style">
+      <button class="view-btn"        id="rs_pencil"   onclick="setRenderStyle('pencil')">Pencil</button>
+      <button class="view-btn"        id="rs_hybrid"   onclick="setRenderStyle('hybrid')">Hybrid</button>
+      <button class="view-btn active" id="rs_rendered" onclick="setRenderStyle('rendered')">Rendered</button>
     </div>
     <button class="btn-s ghost" onclick="saveEditorProject()">Save Project</button>
     <button class="btn-s ghost" onclick="exportData()">Export JSON</button>
@@ -204,7 +222,7 @@
       </div>
       <input type="range" class="slider" id="deductSlider"
              min="0" max="60" value="25" oninput="onDeductSlider()"/>
-      <div style="font-family:var(--mono);font-size:8px;color:var(--text-dimmer);margin-top:5px;line-height:1.5">
+      <div style="font-family:var(--mono);font-size:9px;color:var(--text-dimmer);margin-top:5px;line-height:1.5">
         Road + SuDS measured from drawn geometry · net = gross − road − SuDS − open-space%
       </div>
     </div>
@@ -262,10 +280,10 @@
         </button>
         <div class="ctrl-row" style="margin-top:10px">
           <span class="ctrl-label">Target homes</span>
-          <span class="ctrl-val" id="dwellingCountLabel">30</span>
+          <span class="ctrl-val" id="dwellingCountLabel">24</span>
         </div>
         <input type="range" class="slider" id="dwellingSlider"
-               min="10" max="60" value="30" oninput="onTargetCount(this.value)"/>
+               min="10" max="60" value="24" oninput="onTargetCount(this.value)"/>
         <div class="ctrl-row" style="margin-top:10px">
           <span class="ctrl-label">Front setback</span>
           <span class="ctrl-val" id="setbackLabel">6m</span>
@@ -288,7 +306,7 @@
                 style="border-color:rgba(255,212,0,0.5);color:#ffe066;margin-top:8px">
           ☀ Roof solar: On
         </button>
-        <div style="font-family:var(--mono);font-size:8px;color:var(--text-dimmer);margin-top:6px;line-height:1.5">
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text-dimmer);margin-top:6px;line-height:1.5">
           Homes front the road · E/W buffers kept clear · Hailsham vernacular (brick / render /
           weatherboard / hung tile, clay / slate roofs). Mix + materials indicative, not a policy commitment.
         </div>
@@ -315,7 +333,7 @@
         </div>
         <input type="range" class="slider" id="roadWidthSlider"
                min="3" max="8" value="5" step="0.5" oninput="onRoadWidth(this.value)"/>
-        <div style="font-family:var(--mono);font-size:8px;color:var(--text-dimmer);margin-top:5px;line-height:1.5">
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text-dimmer);margin-top:5px;line-height:1.5">
           Starts at the access stub · click to extend · dbl-click / Esc to finish
         </div>
       </div>
@@ -353,7 +371,7 @@
           <span class="ctrl-val" id="sudsAreaLabel">0 m²</span>
         </div>
         <div id="sudsSummary" class="mix-list">No SuDS drawn yet.</div>
-        <div style="font-family:var(--mono);font-size:8px;color:var(--text-dimmer);margin-top:6px;line-height:1.5">
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text-dimmer);margin-top:6px;line-height:1.5">
           Attenuation only — Weald Clay rules out soakaways. Area feeds net developable.
         </div>
       </div>
@@ -383,11 +401,11 @@
                 style="border-color:rgba(255,80,80,0.2);color:rgba(255,100,100,0.6)">
           ✕ Remove plan
         </button>
-        <div style="font-family:var(--mono);font-size:8px;color:var(--text-dimmer);
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text-dimmer);
                     margin-top:4px;line-height:1.5">
           Arrow keys nudge plan · Shift = 5m
         </div>
-        <div style="font-family:var(--mono);font-size:8px;color:var(--text-dimmer);
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text-dimmer);
                     margin-top:4px;line-height:1.5">
           Not saved with project
         </div>
@@ -407,7 +425,7 @@
                 style="border-color:rgba(255,80,80,0.2);color:rgba(255,100,100,0.6)">
           ✕ Clear boundary
         </button>
-        <div style="font-family:var(--mono);font-size:8px;color:var(--text-dimmer);
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text-dimmer);
                     margin-top:4px;line-height:1.5">
           Coords centred on centroid
         </div>
@@ -421,7 +439,7 @@
                 style="border-color:rgba(255,140,0,0.35);color:#ffae4d">
           ⌖ Move entrance
         </button>
-        <div style="font-family:var(--mono);font-size:8px;color:var(--text-dimmer);
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text-dimmer);
                     margin-top:4px;line-height:1.5">
           Click the boundary to reposition · placed in 2D
         </div>
@@ -461,7 +479,7 @@
                 style="border-color:rgba(33,150,243,0.5);color:#5db4f5">
           ＋ Seed eastern pond
         </button>
-        <div style="font-family:var(--mono);font-size:8px;color:var(--text-dimmer);
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text-dimmer);
                     margin-top:4px;line-height:1.5">
           Sewer N · water E frontage · elec SW (off-site). Indicative defaults — verify
           vs the marked-up OS plan before use. Service runs are indicative, not designed.

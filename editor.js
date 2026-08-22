@@ -14,6 +14,7 @@ const COLS  = ['#1a6cff', '#00d4ff', '#00e87a', '#ff8c00', '#a855f7', '#f43f5e']
 let zoom = 1, panX = 0, panY = 0;
 let tool = 'site';
 let view = '2d';
+let renderStyle = 'rendered'; // 3D presentation style: 'pencil' | 'hybrid' | 'rendered'
 let sitePts    = [];
 let siteClosed = false;
 let buildings  = [];
@@ -100,7 +101,7 @@ let genParams = {
   bufferE:      15,  // m no-build heritage buffer on the EAST (Sayerlands House)
   bufferW:      12,  // m no-build landscape buffer on the WEST (Cuckoo Trail)
   boundaryInset: 6,  // m general no-build inset from the boundary line
-  targetCount:  30,  // desired dwelling count; generator caps at what fits
+  targetCount:  24,  // desired dwelling count — default targets the defensible ~19–25 dw/ha band
   solar:        true,// roof-integrated PV on the south-facing slopes
 };
 
@@ -150,6 +151,19 @@ let calibrating = false;
 // OSGB centroid {e,n} subtracted from the DXF boundary at import. Kept so a
 // georeferenced PDF underlay can be aligned to the boundary's OSGB frame.
 let dxfOrigin   = null;
+
+// The real Dashlands site, embedded so it always loads by default (the plot to
+// design around). Exact 8 vertices from dashlands_boundary_osgb_joined.dxf,
+// centroid-relative; origin is the OSGB centroid used as dxfOrigin so the
+// entrance, utilities and any georeferenced underlay align to the OSGB frame.
+const DASHLANDS_SITE = {
+  origin: { e: 558686.61, n: 106982.453 },
+  pts: [
+    { x: -78.20, y:  83.38 }, { x: -99.22, y: -22.18 }, { x:  68.49, y: -131.53 },
+    { x:  80.02, y: -75.98 }, { x: -37.53, y:   6.66 }, { x:  -6.49, y:   52.95 },
+    { x:  32.06, y:  34.59 }, { x:  40.87, y:   52.12 }
+  ]
+};
 
 /* ── CANVAS SETUP ─────────────────────────────────────────── */
 const canvas = document.getElementById('c2d');
@@ -512,7 +526,7 @@ function addRoad3d(scene, cx, cz) {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
   geo.computeVertexNormals();
-  const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: 0x6b6b6b, side: THREE.DoubleSide }));
+  const mesh = new THREE.Mesh(geo, styleSurface(0x4f5358, { rough: 0.95, side: THREE.DoubleSide, pencil: 0xd6d3ca }));
   mesh.receiveShadow = true;
   scene.add(mesh);
 }
@@ -1107,6 +1121,60 @@ function drawDwellings2d() {
   ctx.restore();
 }
 
+/* ── RENDER STYLES (pencil / hybrid / rendered) ───────────── */
+// One 3D scene, three presentation looks:
+//   rendered — photoreal: PBR materials, sky, soft shadows, grass ground
+//   hybrid   — muted colours + edge outlines (drawing with colour)
+//   pencil   — paper-white massing + black outlines (line drawing)
+const RENDER_STYLES = { pencil: 'Pencil', hybrid: 'Hybrid', rendered: 'Rendered' };
+
+function setRenderStyle(s) {
+  if (!RENDER_STYLES[s]) return;
+  renderStyle = s;
+  Object.keys(RENDER_STYLES).forEach(k => {
+    const b = document.getElementById('rs_' + k);
+    if (b) b.classList.toggle('active', k === renderStyle);
+  });
+  if (view === '3d') build3d(); else setView('3d');
+}
+
+// Desaturate + lighten a colour toward paper for the hybrid look.
+function mutedColor(hex, amt = 0.45) {
+  const c = new THREE.Color(hex), hsl = {};
+  c.getHSL(hsl);
+  c.setHSL(hsl.h, hsl.s * (1 - amt), Math.min(0.9, hsl.l + amt * 0.22));
+  return c;
+}
+
+// Style-aware surface material. opts: { rough, metal, opacity, glass, side, pencil }.
+function styleSurface(hex, opts = {}) {
+  const { rough = 0.85, metal = 0.0, opacity = 1, glass = false, side, pencil } = opts;
+  const t = opacity < 1;
+  if (renderStyle === 'pencil') {
+    return new THREE.MeshBasicMaterial({ color: pencil != null ? pencil : 0xf7f5ef, transparent: t, opacity, side });
+  }
+  if (renderStyle === 'rendered') {
+    return new THREE.MeshStandardMaterial({
+      color: hex, roughness: glass ? 0.08 : rough, metalness: glass ? 0.15 : metal,
+      transparent: t, opacity, side,
+    });
+  }
+  return new THREE.MeshLambertMaterial({ color: mutedColor(hex), transparent: t, opacity, side });
+}
+
+// Add black/grey edge outlines matching a mesh (pencil + hybrid only).
+function styleEdges(group, mesh) {
+  if (renderStyle === 'rendered') return;
+  const col = renderStyle === 'pencil' ? 0x2b2b2b : 0x3a3f46;
+  const op  = renderStyle === 'pencil' ? 0.9 : 0.4;
+  const eg = new THREE.LineSegments(new THREE.EdgesGeometry(mesh.geometry, 25),
+    new THREE.LineBasicMaterial({ color: col, transparent: true, opacity: op }));
+  eg.position.copy(mesh.position);
+  eg.rotation.copy(mesh.rotation);
+  eg.scale.copy(mesh.scale);
+  group.add(eg);
+}
+
 // Pitch rise for a house of the given footprint (≈35–40° roof).
 function houseRise(w, d) { return Math.min(w, d) * 0.32; }
 
@@ -1136,15 +1204,17 @@ function addHouse3d(scene, dw, cx, cz) {
   grp.rotation.y = dw.rot;
 
   const body = new THREE.Mesh(new THREE.BoxGeometry(dw.w, eave, dw.d),
-    new THREE.MeshLambertMaterial({ color: wallCol }));
+    styleSurface(wallCol, { rough: 0.92 }));
   body.position.y = eave / 2;
   body.castShadow = true; body.receiveShadow = true;
   grp.add(body);
+  styleEdges(grp, body);
 
   const roof = new THREE.Mesh(makePitchedRoof(dw.w, dw.d, eave, rise),
-    new THREE.MeshLambertMaterial({ color: roofCol, side: THREE.DoubleSide }));
+    styleSurface(roofCol, { rough: 0.8, side: THREE.DoubleSide }));
   roof.castShadow = true;
   grp.add(roof);
+  styleEdges(grp, roof);
 
   // Local +Z maps to the world direction (t.y, -t.x); pick the sign that faces the road.
   const t = { x: Math.cos(dw.rot), y: Math.sin(dw.rot) };
@@ -1152,8 +1222,8 @@ function addHouse3d(scene, dw, cx, cz) {
   const frontSign = ((dw.frontX || 0) * localZ.x + (dw.frontY || 0) * localZ.y) >= 0 ? 1 : -1;
   const zFace = frontSign * (dw.d / 2 + 0.06);
 
-  const glassMat = new THREE.MeshLambertMaterial({ color: 0x2a2f36 });
-  const doorMat  = new THREE.MeshLambertMaterial({ color: 0x4a3524 });
+  const glassMat = styleSurface(0x243244, { glass: true, rough: 0.05, metal: 0.1, pencil: 0xdfe6ea });
+  const doorMat  = styleSurface(0x4a3524, { rough: 0.7, pencil: 0xe0d8cc });
   const win = (px, py, ww, hh) => {
     const m = new THREE.Mesh(new THREE.BoxGeometry(ww, hh, 0.1), glassMat);
     m.position.set(px, py, zFace); grp.add(m);
@@ -1167,9 +1237,10 @@ function addHouse3d(scene, dw, cx, cz) {
     win(dw.w * 0.05,  eave - 1.4, 1.2, 1.2);
     win(dw.w * 0.30,  eave - 1.4, 1.2, 1.2);
     const chim = new THREE.Mesh(new THREE.BoxGeometry(0.8, rise + 1.2, 0.8),
-      new THREE.MeshLambertMaterial({ color: wallCol }));
+      styleSurface(wallCol, { rough: 0.92 }));
     chim.position.set(dw.w * 0.32, eave + (rise + 1.2) / 2 - 0.2, dw.d * 0.15);
     chim.castShadow = true; grp.add(chim);
+    styleEdges(grp, chim);
   }
 
   // Roof PV on whichever slope faces south (world -y). Panel lies on the pitch.
@@ -1178,7 +1249,7 @@ function addHouse3d(scene, dw, cx, cz) {
     const pitch  = Math.atan2(rise, dw.d / 2);
     const slopeLen = Math.hypot(dw.d / 2, rise);
     const pv = new THREE.Mesh(new THREE.BoxGeometry(dw.w * 0.8, 0.08, slopeLen * 0.68),
-      new THREE.MeshLambertMaterial({ color: 0x10233a }));
+      styleSurface(0x0e1f38, { glass: true, metal: 0.2, rough: 0.15, pencil: 0xccced2 }));
     pv.position.set(0, eave + rise * 0.5 + 0.08, pvSign * (dw.d / 4));
     pv.rotation.x = pvSign * -pitch;
     grp.add(pv);
@@ -1347,9 +1418,10 @@ function addSuds3d(scene, cx, cz) {
     shape.closePath();
     const col = (SUDS_TYPES[f.type] || SUDS_TYPES.pond).color;
     const isPond = f.type === 'pond';
-    const mat = new THREE.MeshLambertMaterial({
-      color: new THREE.Color(col),
-      transparent: true, opacity: isPond ? 0.75 : 0.55, side: THREE.DoubleSide,
+    const mat = styleSurface(col, {
+      opacity: isPond ? 0.8 : 0.6, side: THREE.DoubleSide,
+      glass: isPond, rough: isPond ? 0.05 : 0.7,
+      pencil: isPond ? 0xcdd8de : 0xe4e0d4,
     });
     const m = new THREE.Mesh(new THREE.ShapeGeometry(shape), mat);
     m.rotation.x = -Math.PI / 2;
@@ -2131,19 +2203,49 @@ function build3d() {
   cam3.aspect = w / h;
   cam3.updateProjectionMatrix();
 
+  // Per-style renderer settings
+  r3.shadowMap.enabled = (renderStyle === 'rendered');
+  r3.shadowMap.type    = THREE.PCFSoftShadowMap;
+  r3.toneMapping       = (renderStyle === 'rendered') ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
+  r3.toneMappingExposure = 1.05;
+  if ('outputEncoding' in r3) r3.outputEncoding = THREE.sRGBEncoding; // three r128
+
   s3 = new THREE.Scene();
-  s3.fog = new THREE.Fog(0x3d3d3d, 400, 900);
-  s3.add(new THREE.GridHelper(500, 50, 0x4a4a4a, 0x3d3d3d));
-  s3.add(new THREE.AmbientLight(0xffffff, 0.45));
-  const sun = new THREE.DirectionalLight(0x6699ff, 0.85);
-  sun.position.set(100, 200, 80);
-  sun.castShadow = true;
-  sun.shadow.mapSize.width  = 2048;
-  sun.shadow.mapSize.height = 2048;
-  s3.add(sun);
-  const fill = new THREE.PointLight(0x00d4ff, 0.25, 600);
-  fill.position.set(-80, 60, -80);
-  s3.add(fill);
+  if (renderStyle === 'rendered') {
+    s3.background = new THREE.Color(0xaccbe6);                     // soft sky
+    s3.fog = new THREE.Fog(0xaccbe6, 550, 1500);
+    s3.add(new THREE.HemisphereLight(0xdff0ff, 0x54402c, 0.75));  // sky + ground bounce
+    const sun = new THREE.DirectionalLight(0xfff2d6, 1.15);       // warm low sun
+    sun.position.set(120, 210, 90);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.camera.near = 10; sun.shadow.camera.far = 700;
+    sun.shadow.camera.left = -240; sun.shadow.camera.right = 240;
+    sun.shadow.camera.top = 240; sun.shadow.camera.bottom = -240;
+    sun.shadow.bias = -0.0004;
+    s3.add(sun);
+    s3.add(new THREE.AmbientLight(0xffffff, 0.16));
+  } else if (renderStyle === 'hybrid') {
+    s3.background = new THREE.Color(0xe7ebef);
+    s3.fog = null;
+    s3.add(new THREE.HemisphereLight(0xffffff, 0x9aa0a6, 0.9));
+    const sun = new THREE.DirectionalLight(0xffffff, 0.5);
+    sun.position.set(120, 210, 90);
+    s3.add(sun);
+    s3.add(new THREE.AmbientLight(0xffffff, 0.4));
+  } else { // pencil — flat, shadeless paper look
+    s3.background = new THREE.Color(0xf7f5ef);
+    s3.fog = null;
+    s3.add(new THREE.AmbientLight(0xffffff, 1.0));
+  }
+
+  // Ground plane (grass / paper) under everything
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(1600, 1600),
+    styleSurface(0x6f8a52, { rough: 1.0, pencil: 0xf7f5ef }));
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.y = -0.05;
+  ground.receiveShadow = (renderStyle === 'rendered');
+  s3.add(ground);
 
   const cx = sitePts.length ? sitePts.reduce((s, p) => s + p.x, 0) / sitePts.length : 0;
   const cz = sitePts.length ? sitePts.reduce((s, p) => s + p.y, 0) / sitePts.length : 0;
@@ -2154,14 +2256,16 @@ function build3d() {
     for (let i = 1; i < sitePts.length; i++) shape.lineTo(sitePts[i].x - cx, sitePts[i].y - cz);
     shape.closePath();
     const geo = new THREE.ShapeGeometry(shape);
-    const mat = new THREE.MeshLambertMaterial({ color: 0x424242, side: THREE.DoubleSide });
-    const m   = new THREE.Mesh(geo, mat);
+    const m   = new THREE.Mesh(geo, styleSurface(0x86a05e, { rough: 1.0, side: THREE.DoubleSide, pencil: 0xefede4 }));
     m.rotation.x = -Math.PI / 2;
     m.position.y = 0.1;
+    m.receiveShadow = (renderStyle === 'rendered');
     s3.add(m);
     const pts3 = sitePts.map(p => new THREE.Vector3(p.x - cx, 0.2, -(p.y - cz)));
     pts3.push(pts3[0].clone());
-    s3.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts3), new THREE.LineBasicMaterial({ color: 0x1a6cff })));
+    const bCol = renderStyle === 'pencil' ? 0x2b2b2b : 0x1a6cff;
+    s3.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts3),
+      new THREE.LineBasicMaterial({ color: bCol })));
   }
 
   buildings.forEach(b => {
@@ -2245,7 +2349,7 @@ function saveEditorProject() {
     created:     new Date().toISOString(),
     type:        'editor',
     stats:       { gfa, buildings: buildings.length, siteArea: sA, floors: buildings.length ? Math.max(...buildings.map(b => b.floors)) : 0 },
-    editorState: { sitePts, siteClosed, buildings, defW, defD, defF, accessPt, accessSplay, road, utilities, deductPct, dwellings, genParams, suds }
+    editorState: { sitePts, siteClosed, buildings, defW, defD, defF, accessPt, accessSplay, road, utilities, deductPct, dwellings, genParams, suds, renderStyle }
   });
   showToast('Project saved!');
 }
@@ -2758,6 +2862,14 @@ if (new URLSearchParams(window.location.search).get('load')) {
     // Attenuation SuDS
     suds = saved.suds || [];
     sudsId = suds.reduce((m, f) => Math.max(m, f.id || 0), 0) + 1;
+    // 3D presentation style
+    if (saved.renderStyle && RENDER_STYLES[saved.renderStyle]) {
+      renderStyle = saved.renderStyle;
+      Object.keys(RENDER_STYLES).forEach(k => {
+        const b = document.getElementById('rs_' + k);
+        if (b) b.classList.toggle('active', k === renderStyle);
+      });
+    }
     document.getElementById('dW').value = defW;
     document.getElementById('dD').value = defD;
     document.getElementById('dF').value = defF;
@@ -2765,16 +2877,18 @@ if (new URLSearchParams(window.location.search).get('load')) {
     showToast('Project loaded from saved state');
   }
 } else {
-  // Load a demo site on first open
+  // Load the real Dashlands plot on first open (the site to design around)
   setTimeout(() => {
     if (siteClosed || sitePts.length) return; // don't overwrite a boundary loaded before this fires
-    sitePts    = [{ x: -35, y: -25 }, { x: 35, y: -25 }, { x: 35, y: 25 }, { x: -35, y: 25 }];
+    sitePts    = DASHLANDS_SITE.pts.map(p => ({ x: p.x, y: p.y }));
     siteClosed = true;
-    setDefaultAccessPoint();
-    setDefaultUtilities();
-    document.getElementById('hintBar').textContent = 'Demo site loaded — Generate a scheme, or draw a road first';
+    dxfOrigin  = { e: DASHLANDS_SITE.origin.e, n: DASHLANDS_SITE.origin.n };
+    fitViewToBoundary(sitePts); // the plot is ~179×215 m — frame it to the canvas
+    setDefaultAccessPoint();    // entrance snaps to the confirmed Sayerland Lane access
+    setDefaultUtilities();      // utilities land at their documented positions
+    document.getElementById('hintBar').textContent = 'Dashlands site loaded — Generate a scheme, or draw a road first';
     updateStats(); render();
     generateScheme(); // show a generated scheme immediately on first open
-    showToast('Demo scheme generated — draw a road, then Generate again');
+    showToast('Dashlands site loaded — scheme generated; draw a road, then Generate again');
   }, 300);
 }
