@@ -2135,10 +2135,77 @@ function setView(v) {
   else if (anim3) { cancelAnimationFrame(anim3); anim3 = null; }
 }
 
+/* ── BLENDER LANDSCAPE (.glb) ─────────────────────────────── */
+// A high-quality landscape built in Blender from the exported scheme
+// (blender/build_landscape.py → blender/landscape.glb). When shown it replaces
+// the procedural ground/slab/road/homes/SuDS; app markers stay overlaid.
+let blenderModel = null;
+let showBlender  = false;
+
+function toggleBlenderLandscape() {
+  if (blenderModel) { // already loaded → just toggle visibility
+    showBlender = !showBlender;
+    updateBlenderBtn();
+    if (view !== '3d') setView('3d'); else build3d();
+    return;
+  }
+  if (typeof THREE === 'undefined' || typeof THREE.GLTFLoader === 'undefined') {
+    showToast('GLTFLoader not available'); return;
+  }
+  const status = document.getElementById('blenderStatus');
+  if (status) { status.textContent = 'Loading…'; status.className = 'pdf-status'; }
+  new THREE.GLTFLoader().load('/blender/landscape.glb', gltf => {
+    blenderModel = gltf.scene;
+    blenderModel.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+    showBlender = true;
+    if (status) { status.textContent = 'Loaded ✓'; status.className = 'pdf-status calibrated'; }
+    updateBlenderBtn();
+    if (view !== '3d') setView('3d'); else build3d();
+    showToast('Blender landscape loaded');
+  }, undefined, () => {
+    if (status) { status.textContent = 'Load failed — build it first'; status.className = 'pdf-status'; }
+    showToast('Could not load landscape.glb — run blender/build_landscape.py');
+  });
+}
+
+function updateBlenderBtn() {
+  const b = document.getElementById('blenderBtn');
+  if (!b) return;
+  b.classList.toggle('active', showBlender);
+  b.textContent = showBlender ? '▼ Hide Blender landscape'
+    : (blenderModel ? '▲ Show Blender landscape' : '▲ Load Blender landscape');
+}
+
+// Export the current scheme as blender/scene.json input (centroid-relative site
+// coords). Save it into the repo's blender/ folder, then run build_landscape.py.
+function exportSceneJSON() {
+  if (!siteClosed || sitePts.length < 3) { showToast('Close a boundary first'); return; }
+  const hex = n => '#' + n.toString(16).padStart(6, '0');
+  const wallHex = {}, roofHex = {}, sudsHex = {};
+  Object.keys(WALL_MATERIALS).forEach(k => wallHex[k] = hex(WALL_MATERIALS[k].color));
+  Object.keys(ROOF_MATERIALS).forEach(k => roofHex[k] = hex(ROOF_MATERIALS[k].color));
+  Object.keys(SUDS_TYPES).forEach(k => sudsHex[k] = SUDS_TYPES[k].color);
+  const scene = {
+    boundary: sitePts.map(p => [+p.x.toFixed(2), +p.y.toFixed(2)]),
+    road: { centre: roadCenterline().map(p => [+p.x.toFixed(2), +p.y.toFixed(2)]), width: road.width },
+    dwellings: dwellings.map(d => ({ cx: +d.cx.toFixed(2), cy: +d.cy.toFixed(2), rot: +d.rot.toFixed(4),
+      w: d.w, d: d.d, storeys: d.storeys, walls: d.walls, roof: d.roof })),
+    suds: suds.map(f => ({ type: f.type, pts: f.pts.map(p => [+p.x.toFixed(2), +p.y.toFixed(2)]) })),
+    buffers: { bufferE: genParams.bufferE, bufferW: genParams.bufferW },
+    materials: { walls: wallHex, roofs: roofHex, suds: sudsHex },
+  };
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(scene, null, 2)], { type: 'application/json' }));
+  a.download = 'scene.json';
+  a.click();
+  showToast('scene.json exported — move to /blender, run build_landscape.py, then Load');
+}
+
 function build3d() {
   const wrap = document.getElementById('c3d');
   const w = wrap.clientWidth, h = wrap.clientHeight;
   if (!w || !h) return;
+  const useBlender = showBlender && !!blenderModel;
 
   if (!r3) {
     r3 = new THREE.WebGLRenderer({ antialias: true });
@@ -2239,13 +2306,16 @@ function build3d() {
     s3.add(new THREE.AmbientLight(0xffffff, 1.0));
   }
 
-  // Ground plane (grass / paper) under everything
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(1600, 1600),
-    styleSurface(0x6f8a52, { rough: 1.0, pencil: 0xf7f5ef }));
-  ground.rotation.x = -Math.PI / 2;
-  ground.position.y = -0.05;
-  ground.receiveShadow = (renderStyle === 'rendered');
-  s3.add(ground);
+  // Ground plane (grass / paper) under everything — skipped when the Blender
+  // landscape supplies its own terrain.
+  if (!useBlender) {
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(1600, 1600),
+      styleSurface(0x6f8a52, { rough: 1.0, pencil: 0xf7f5ef }));
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -0.05;
+    ground.receiveShadow = (renderStyle === 'rendered');
+    s3.add(ground);
+  }
 
   const cx = sitePts.length ? sitePts.reduce((s, p) => s + p.x, 0) / sitePts.length : 0;
   const cz = sitePts.length ? sitePts.reduce((s, p) => s + p.y, 0) / sitePts.length : 0;
@@ -2255,12 +2325,14 @@ function build3d() {
     shape.moveTo(sitePts[0].x - cx, sitePts[0].y - cz);
     for (let i = 1; i < sitePts.length; i++) shape.lineTo(sitePts[i].x - cx, sitePts[i].y - cz);
     shape.closePath();
-    const geo = new THREE.ShapeGeometry(shape);
-    const m   = new THREE.Mesh(geo, styleSurface(0x86a05e, { rough: 1.0, side: THREE.DoubleSide, pencil: 0xefede4 }));
-    m.rotation.x = -Math.PI / 2;
-    m.position.y = 0.1;
-    m.receiveShadow = (renderStyle === 'rendered');
-    s3.add(m);
+    if (!useBlender) {
+      const geo = new THREE.ShapeGeometry(shape);
+      const m   = new THREE.Mesh(geo, styleSurface(0x86a05e, { rough: 1.0, side: THREE.DoubleSide, pencil: 0xefede4 }));
+      m.rotation.x = -Math.PI / 2;
+      m.position.y = 0.1;
+      m.receiveShadow = (renderStyle === 'rendered');
+      s3.add(m);
+    }
     const pts3 = sitePts.map(p => new THREE.Vector3(p.x - cx, 0.2, -(p.y - cz)));
     pts3.push(pts3[0].clone());
     const bCol = renderStyle === 'pencil' ? 0x2b2b2b : 0x1a6cff;
@@ -2293,9 +2365,14 @@ function build3d() {
     }
   });
 
-  addSuds3d(s3, cx, cz);
-  addDwellings3d(s3, cx, cz);
-  addRoad3d(s3, cx, cz);
+  if (useBlender) {
+    blenderModel.position.set(0, 0, 0);
+    s3.add(blenderModel); // Blender terrain/road/homes/SuDS in place of the procedural set
+  } else {
+    addSuds3d(s3, cx, cz);
+    addDwellings3d(s3, cx, cz);
+    addRoad3d(s3, cx, cz);
+  }
   addEntrance3d(s3, cx, cz);
   addAccessStub3d(s3, cx, cz);
   addUtilities3d(s3, cx, cz);

@@ -12,7 +12,9 @@ const types = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
-  ".svg": "image/svg+xml"
+  ".svg": "image/svg+xml",
+  ".glb": "model/gltf-binary",
+  ".dxf": "application/dxf"
 };
 
 function resolvePath(url) {

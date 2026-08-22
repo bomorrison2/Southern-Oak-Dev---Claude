@@ -378,6 +378,22 @@
     </div>
 
     <div class="sb-section">
+      <div class="sb-title">Landscape · Blender</div>
+      <button class="preset-btn" id="blenderBtn" onclick="toggleBlenderLandscape()"
+              style="border-color:rgba(0,232,122,0.4);color:#4be08f">
+        ▲ Load Blender landscape
+      </button>
+      <button class="preset-btn" onclick="exportSceneJSON()" style="margin-top:4px">
+        ⬇ Export scene.json
+      </button>
+      <div class="pdf-status" id="blenderStatus">Not loaded</div>
+      <div style="font-family:var(--mono);font-size:8px;color:var(--text-dimmer);margin-top:4px;line-height:1.5">
+        High-quality .glb built in Blender from the current scheme (view in 3D).
+        Presentation preview — internal working scenario.
+      </div>
+    </div>
+
+    <div class="sb-section">
       <div class="sb-title">Import Plan</div>
       <!-- Hidden file input — triggered by button below -->
       <input type="file" id="pdfFileInput" accept=".pdf" style="display:none"
@@ -542,6 +558,8 @@
 </script>
 <!-- Three.js for 3D view -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<!-- GLTFLoader (matching build) for the optional Blender landscape .glb -->
+<script src="https://unpkg.com/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
 <script src="shared.js"></script>
 <script src="editor.js"></script>
 </body>
