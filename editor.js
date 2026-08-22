@@ -1121,6 +1121,148 @@ function drawDwellings2d() {
   ctx.restore();
 }
 
+/* ── PHOTOREAL HELPERS (procedural textures, sky, IBL) ─────── */
+// All self-contained (canvas-drawn) so nothing loads over the network.
+const _texCache = {};
+function _canvasTex(key, w, h, draw, repeat) {
+  if (_texCache[key]) return _texCache[key];
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  draw(c.getContext('2d'), w, h);
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  if (repeat) t.repeat.set(repeat[0], repeat[1]);
+  t.anisotropy = 8;
+  if ('encoding' in t) t.encoding = THREE.sRGBEncoding;
+  _texCache[key] = t;
+  return t;
+}
+// deterministic pseudo-noise so textures are stable between builds
+function _rng(seed) { let s = seed >>> 0; return () => (s = (s * 1664525 + 1013904223) >>> 0) / 4294967296; }
+
+function texGrass() {
+  return _canvasTex('grass', 256, 256, (g, w, h) => {
+    g.fillStyle = '#5f7f45'; g.fillRect(0, 0, w, h);
+    const r = _rng(7);
+    for (let i = 0; i < 4200; i++) {
+      const x = r() * w, y = r() * h, l = 1 + r() * 3;
+      const shade = 60 + Math.floor(r() * 70);
+      g.strokeStyle = `rgba(${shade - 20},${shade + 40},${shade - 10},0.5)`;
+      g.beginPath(); g.moveTo(x, y); g.lineTo(x + (r() - 0.5) * 2, y - l); g.stroke();
+    }
+  }, [80, 80]);
+}
+function texBrick() {
+  return _canvasTex('brick', 128, 128, (g, w, h) => {
+    g.fillStyle = '#8f4436'; g.fillRect(0, 0, w, h);
+    const bh = 16, bw = 32, r = _rng(11);
+    for (let row = 0, y = 0; y < h; y += bh, row++) {
+      const off = (row % 2) * (bw / 2);
+      for (let x = -bw; x < w; x += bw) {
+        const v = 150 + Math.floor(r() * 45);
+        g.fillStyle = `rgb(${v},${Math.floor(v * 0.5)},${Math.floor(v * 0.42)})`;
+        g.fillRect(x + off + 1, y + 1, bw - 2, bh - 2);
+      }
+    }
+  }, [3, 2.2]);
+}
+function texRender() { // pastel render, subtle mottle
+  return _canvasTex('render', 128, 128, (g, w, h) => {
+    g.fillStyle = '#e7e2d0'; g.fillRect(0, 0, w, h);
+    const r = _rng(3);
+    for (let i = 0; i < 1600; i++) {
+      g.fillStyle = `rgba(200,195,175,${r() * 0.12})`;
+      g.fillRect(r() * w, r() * h, 2, 2);
+    }
+  }, [2, 2]);
+}
+function texBoard() { // horizontal weatherboarding
+  return _canvasTex('board', 128, 128, (g, w, h) => {
+    for (let y = 0; y < h; y += 10) {
+      const v = 195 + ((y / 10) % 2) * 14;
+      g.fillStyle = `rgb(${v},${v - 6},${v - 22})`; g.fillRect(0, y, w, 9);
+      g.fillStyle = 'rgba(90,80,60,0.35)'; g.fillRect(0, y + 9, w, 1);
+    }
+  }, [2, 3]);
+}
+function texTile() { // clay/slate rows of tiles (colourised via material tint)
+  return _canvasTex('tile', 128, 128, (g, w, h) => {
+    g.fillStyle = '#b0b0b0'; g.fillRect(0, 0, w, h);
+    const th = 12, tw = 16, r = _rng(5);
+    for (let row = 0, y = 0; y < h; y += th, row++) {
+      const off = (row % 2) * (tw / 2);
+      for (let x = -tw; x < w; x += tw) {
+        const v = 150 + Math.floor(r() * 80);
+        g.fillStyle = `rgb(${v},${v},${v})`;
+        g.beginPath();
+        g.moveTo(x + off, y + th); g.lineTo(x + off, y + 3);
+        g.arc(x + off + tw / 2, y + 3, tw / 2, Math.PI, 0);
+        g.lineTo(x + off + tw, y + th); g.closePath(); g.fill();
+        g.strokeStyle = 'rgba(0,0,0,0.25)'; g.stroke();
+      }
+    }
+  }, [4, 3]);
+}
+function texTarmac() {
+  return _canvasTex('tarmac', 128, 128, (g, w, h) => {
+    g.fillStyle = '#3f4247'; g.fillRect(0, 0, w, h);
+    const r = _rng(9);
+    for (let i = 0; i < 2600; i++) {
+      const v = 40 + Math.floor(r() * 70);
+      g.fillStyle = `rgba(${v},${v},${v + 4},0.6)`;
+      g.fillRect(r() * w, r() * h, 1.4, 1.4);
+    }
+  }, [10, 10]);
+}
+// canopy sprite (soft blobby foliage with alpha) for billboard trees
+function texCanopy() {
+  return _canvasTex('canopy', 128, 128, (g, w, h) => {
+    g.clearRect(0, 0, w, h);
+    const r = _rng(13), cx = w / 2, cy = h * 0.55;
+    for (let i = 0; i < 260; i++) {
+      const a = r() * Math.PI * 2, rad = r() * 52;
+      const x = cx + Math.cos(a) * rad, y = cy + Math.sin(a) * rad * 0.9;
+      const s = 8 + r() * 16, gr = 90 + Math.floor(r() * 70);
+      g.fillStyle = `rgba(${Math.floor(gr * 0.5)},${gr},${Math.floor(gr * 0.45)},0.5)`;
+      g.beginPath(); g.arc(x, y, s, 0, Math.PI * 2); g.fill();
+    }
+  });
+}
+
+// Equirectangular sky canvas → used for both the sky dome and IBL env map.
+let _skyTex = null;
+function skyEquirect() {
+  if (_skyTex) return _skyTex;
+  const w = 1024, h = 512, c = document.createElement('canvas');
+  c.width = w; c.height = h; const g = c.getContext('2d');
+  const grd = g.createLinearGradient(0, 0, 0, h);
+  grd.addColorStop(0.0, '#3f74c4');   // zenith
+  grd.addColorStop(0.5, '#9cc3e8');   // mid
+  grd.addColorStop(0.62, '#dce9f4');  // horizon haze
+  grd.addColorStop(1.0, '#c8d3c0');   // ground haze
+  g.fillStyle = grd; g.fillRect(0, 0, w, h);
+  // warm sun glow
+  const sx = w * 0.72, sy = h * 0.30, sun = g.createRadialGradient(sx, sy, 0, sx, sy, 150);
+  sun.addColorStop(0, 'rgba(255,247,225,1)');
+  sun.addColorStop(0.15, 'rgba(255,241,205,0.9)');
+  sun.addColorStop(1, 'rgba(255,241,205,0)');
+  g.fillStyle = sun; g.fillRect(0, 0, w, h);
+  _skyTex = new THREE.CanvasTexture(c);
+  _skyTex.mapping = THREE.EquirectangularReflectionMapping;
+  if ('encoding' in _skyTex) _skyTex.encoding = THREE.sRGBEncoding;
+  return _skyTex;
+}
+// IBL environment (PMREM) built once from the sky — realistic PBR reflections + ambient.
+let _envMap = null;
+function envMap(renderer) {
+  if (_envMap) return _envMap;
+  try {
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    pmrem.compileEquirectangularShader();
+    _envMap = pmrem.fromEquirectangular(skyEquirect()).texture;
+  } catch (e) { _envMap = null; }
+  return _envMap;
+}
+
 /* ── RENDER STYLES (pencil / hybrid / rendered) ───────────── */
 // One 3D scene, three presentation looks:
 //   rendered — photoreal: PBR materials, sky, soft shadows, grass ground
@@ -1146,20 +1288,45 @@ function mutedColor(hex, amt = 0.45) {
   return c;
 }
 
-// Style-aware surface material. opts: { rough, metal, opacity, glass, side, pencil }.
+// Style-aware surface material. opts: { rough, metal, opacity, glass, side, pencil, tex, bump }.
 function styleSurface(hex, opts = {}) {
-  const { rough = 0.85, metal = 0.0, opacity = 1, glass = false, side, pencil } = opts;
+  const { rough = 0.85, metal = 0.0, opacity = 1, glass = false, side, pencil, tex, bump = 0.03 } = opts;
   const t = opacity < 1;
   if (renderStyle === 'pencil') {
     return new THREE.MeshBasicMaterial({ color: pencil != null ? pencil : 0xf7f5ef, transparent: t, opacity, side });
   }
   if (renderStyle === 'rendered') {
-    return new THREE.MeshStandardMaterial({
-      color: hex, roughness: glass ? 0.08 : rough, metalness: glass ? 0.15 : metal,
+    const m = new THREE.MeshStandardMaterial({
+      color: tex ? 0xffffff : hex, roughness: glass ? 0.08 : rough, metalness: glass ? 0.15 : metal,
       transparent: t, opacity, side,
     });
+    if (tex) { m.map = tex; m.bumpMap = tex; m.bumpScale = bump; }
+    return m;
   }
   return new THREE.MeshLambertMaterial({ color: mutedColor(hex), transparent: t, opacity, side });
+}
+
+// Textured Hailsham wall material (rendered mode); falls back to styleSurface.
+function wallMaterial(key, hex) {
+  if (renderStyle !== 'rendered') return styleSurface(hex, { rough: 0.92 });
+  let map, color = 0xffffff, rough = 0.9;
+  if (key === 'brick') map = texBrick();
+  else if (key === 'render') map = texRender();
+  else if (key === 'weatherboard') { map = texBoard(); color = hex; }
+  else if (key === 'tilehung') { map = texTile(); color = hex; rough = 0.85; }
+  else map = texRender();
+  const m = new THREE.MeshStandardMaterial({ map, color, roughness: rough, metalness: 0 });
+  m.bumpMap = map; m.bumpScale = 0.04;
+  return m;
+}
+
+// Textured roof material (rendered mode) tinted to clay/slate; else styleSurface.
+function roofMaterial(hex) {
+  if (renderStyle !== 'rendered') return styleSurface(hex, { rough: 0.8, side: THREE.DoubleSide });
+  const tile = texTile();
+  const m = new THREE.MeshStandardMaterial({ map: tile, color: hex, roughness: 0.75, metalness: 0, side: THREE.DoubleSide });
+  m.bumpMap = tile; m.bumpScale = 0.06;
+  return m;
 }
 
 // Add black/grey edge outlines matching a mesh (pencil + hybrid only).
@@ -1204,14 +1371,16 @@ function addHouse3d(scene, dw, cx, cz) {
   grp.rotation.y = dw.rot;
 
   const body = new THREE.Mesh(new THREE.BoxGeometry(dw.w, eave, dw.d),
-    styleSurface(wallCol, { rough: 0.92 }));
+    wallMaterial(dw.walls, wallCol));
   body.position.y = eave / 2;
   body.castShadow = true; body.receiveShadow = true;
   grp.add(body);
   styleEdges(grp, body);
 
-  const roof = new THREE.Mesh(makePitchedRoof(dw.w, dw.d, eave, rise),
-    styleSurface(roofCol, { rough: 0.8, side: THREE.DoubleSide }));
+  // Pitched roof with a small eaves overhang for realism
+  const oh = renderStyle === 'rendered' ? 0.6 : 0;
+  const roof = new THREE.Mesh(makePitchedRoof(dw.w + oh, dw.d + oh, eave, rise),
+    roofMaterial(roofCol));
   roof.castShadow = true;
   grp.add(roof);
   styleEdges(grp, roof);
@@ -2135,6 +2304,78 @@ function setView(v) {
   else if (anim3) { cancelAnimationFrame(anim3); anim3 = null; }
 }
 
+/* ── VEGETATION (rendered) — hedgerows + billboard trees ──── */
+function makeTree3d(tx, tz, scale) {
+  const g = new THREE.Group();
+  const th = 3 * scale;
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.25 * scale, 0.38 * scale, th, 6),
+    new THREE.MeshStandardMaterial({ color: 0x5b4327, roughness: 0.9 }));
+  trunk.position.set(tx, th / 2, tz); trunk.castShadow = true; g.add(trunk);
+  const mat = new THREE.MeshLambertMaterial({ map: texCanopy(), transparent: true,
+    alphaTest: 0.35, side: THREE.DoubleSide });
+  const cw = 6 * scale, ch = 5.5 * scale;
+  for (const ry of [0, Math.PI / 2]) {
+    const p = new THREE.Mesh(new THREE.PlaneGeometry(cw, ch), mat);
+    p.position.set(tx, th + ch / 2 - 0.6, tz); p.rotation.y = ry; p.castShadow = true;
+    g.add(p);
+  }
+  return g;
+}
+
+// Retained hedgerow along every boundary edge, offset just inside the line.
+function addHedgerow3d(scene, cx, cz) {
+  const cxp = sitePts.reduce((s, p) => s + p.x, 0) / sitePts.length;
+  const cyp = sitePts.reduce((s, p) => s + p.y, 0) / sitePts.length;
+  const mat = new THREE.MeshStandardMaterial({ color: 0x3c5a2e, roughness: 1.0 });
+  for (let i = 0; i < sitePts.length; i++) {
+    const a = sitePts[i], b = sitePts[(i + 1) % sitePts.length];
+    const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy);
+    if (len < 3) continue;
+    let nx = -dy / len, ny = dx / len;
+    const mxp = (a.x + b.x) / 2, myp = (a.y + b.y) / 2;
+    if (nx * (cxp - mxp) + ny * (cyp - myp) < 0) { nx = -nx; ny = -ny; }
+    const off = 1.8;
+    const m = new THREE.Mesh(new THREE.BoxGeometry(len - 1, 1.7, 1.3), mat);
+    m.position.set(mxp + nx * off - cx, 0.85, -(myp + ny * off - cz));
+    m.rotation.y = Math.atan2(dy, dx);
+    m.castShadow = true; m.receiveShadow = true;
+    scene.add(m);
+  }
+}
+
+// Trees scattered through the heritage/Cuckoo buffers + a few outside the site.
+function addTrees3d(scene, cx, cz) {
+  const b = boundaryBounds();
+  const r = _rng(101);
+  let placed = 0;
+  // buffer-band trees (inside boundary, in the E/W no-build bands)
+  for (let y = b.yMin + 6; y <= b.yMax - 6 && placed < 60; y += 9) {
+    for (const band of [maxBandX(b, 'E'), maxBandX(b, 'W')]) {
+      const x = band + (r() - 0.5) * 6;
+      if (pointInBoundary(x, y) && distToBoundary(x, y) > 1 && !inAnySuds(x, y)) {
+        scene.add(makeTree3d(x - cx, -(y - cz), 0.9 + r() * 0.6)); placed++;
+      }
+    }
+  }
+  // a light scatter of context trees just outside the boundary
+  for (let i = 0; i < 40; i++) {
+    const x = b.xMin - 20 + r() * (b.xMax - b.xMin + 40);
+    const y = b.yMin - 20 + r() * (b.yMax - b.yMin + 40);
+    if (!pointInBoundary(x, y) && Math.abs(x) < 260 && Math.abs(y) < 260) {
+      scene.add(makeTree3d(x - cx, -(y - cz), 1.0 + r() * 0.8));
+    }
+  }
+}
+function maxBandX(b, side) {
+  return side === 'E' ? b.xMax - genParams.bufferE * 0.5 : b.xMin + genParams.bufferW * 0.5;
+}
+
+function addVegetation3d(scene, cx, cz) {
+  if (renderStyle !== 'rendered' || !siteClosed || sitePts.length < 3) return;
+  addHedgerow3d(scene, cx, cz);
+  addTrees3d(scene, cx, cz);
+}
+
 /* ── BLENDER LANDSCAPE (.glb) ─────────────────────────────── */
 // A high-quality landscape built in Blender from the exported scheme
 // (blender/build_landscape.py → blender/landscape.glb). When shown it replaces
@@ -2279,19 +2520,19 @@ function build3d() {
 
   s3 = new THREE.Scene();
   if (renderStyle === 'rendered') {
-    s3.background = new THREE.Color(0xaccbe6);                     // soft sky
-    s3.fog = new THREE.Fog(0xaccbe6, 550, 1500);
-    s3.add(new THREE.HemisphereLight(0xdff0ff, 0x54402c, 0.75));  // sky + ground bounce
-    const sun = new THREE.DirectionalLight(0xfff2d6, 1.15);       // warm low sun
-    sun.position.set(120, 210, 90);
+    s3.background = skyEquirect();          // gradient sky with sun glow
+    s3.environment = envMap(r3);            // IBL: realistic PBR reflections + ambient
+    s3.fog = new THREE.Fog(0xcdddf0, 620, 1700);
+    s3.add(new THREE.HemisphereLight(0xdff0ff, 0x4a3b28, 0.55)); // sky + earth bounce
+    const sun = new THREE.DirectionalLight(0xfff1cf, 1.35);      // warm sun, low
+    sun.position.set(150, 165, 120);
     sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
-    sun.shadow.camera.near = 10; sun.shadow.camera.far = 700;
-    sun.shadow.camera.left = -240; sun.shadow.camera.right = 240;
-    sun.shadow.camera.top = 240; sun.shadow.camera.bottom = -240;
-    sun.shadow.bias = -0.0004;
+    sun.shadow.mapSize.set(4096, 4096);
+    sun.shadow.camera.near = 10; sun.shadow.camera.far = 800;
+    sun.shadow.camera.left = -260; sun.shadow.camera.right = 260;
+    sun.shadow.camera.top = 260; sun.shadow.camera.bottom = -260;
+    sun.shadow.bias = -0.0003; sun.shadow.radius = 3;
     s3.add(sun);
-    s3.add(new THREE.AmbientLight(0xffffff, 0.16));
   } else if (renderStyle === 'hybrid') {
     s3.background = new THREE.Color(0xe7ebef);
     s3.fog = null;
@@ -2310,7 +2551,7 @@ function build3d() {
   // landscape supplies its own terrain.
   if (!useBlender) {
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(1600, 1600),
-      styleSurface(0x6f8a52, { rough: 1.0, pencil: 0xf7f5ef }));
+      styleSurface(0x6f8a52, { rough: 1.0, pencil: 0xf7f5ef, tex: renderStyle === 'rendered' ? texGrass() : null }));
     ground.rotation.x = -Math.PI / 2;
     ground.position.y = -0.05;
     ground.receiveShadow = (renderStyle === 'rendered');
@@ -2327,7 +2568,7 @@ function build3d() {
     shape.closePath();
     if (!useBlender) {
       const geo = new THREE.ShapeGeometry(shape);
-      const m   = new THREE.Mesh(geo, styleSurface(0x86a05e, { rough: 1.0, side: THREE.DoubleSide, pencil: 0xefede4 }));
+      const m   = new THREE.Mesh(geo, styleSurface(0x86a05e, { rough: 1.0, side: THREE.DoubleSide, pencil: 0xefede4, tex: renderStyle === 'rendered' ? texGrass() : null }));
       m.rotation.x = -Math.PI / 2;
       m.position.y = 0.1;
       m.receiveShadow = (renderStyle === 'rendered');
@@ -2372,6 +2613,7 @@ function build3d() {
     addSuds3d(s3, cx, cz);
     addDwellings3d(s3, cx, cz);
     addRoad3d(s3, cx, cz);
+    addVegetation3d(s3, cx, cz);
   }
   addEntrance3d(s3, cx, cz);
   addAccessStub3d(s3, cx, cz);
