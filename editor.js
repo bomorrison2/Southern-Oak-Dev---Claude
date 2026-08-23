@@ -69,8 +69,8 @@ const WALL_MATERIALS = {
   tilehung:     { label: 'Hung tiles',   color: 0x9c5646 },
 };
 const ROOF_MATERIALS = {
-  clay:  { label: 'Red clay',   color: 0x8a3b2a },
-  slate: { label: 'Dark slate', color: 0x3b4046 },
+  clay:  { label: 'Red clay',   color: 0xb5583a },
+  slate: { label: 'Dark slate', color: 0x565d66 },
 };
 // Which wall/roof materials suit each house type (first is the default lead).
 const TYPE_MATERIALS = {
@@ -103,6 +103,7 @@ let genParams = {
   boundaryInset: 6,  // m general no-build inset from the boundary line
   targetCount:  24,  // desired dwelling count — default targets the defensible ~19–25 dw/ha band
   solar:        true,// roof-integrated PV on the south-facing slopes
+  autoRoad:     true,// auto-lay an estate road spine when none is drawn
 };
 
 /* ── SITE ACCESS POINT ────────────────────────────────────── */
@@ -508,27 +509,85 @@ function drawRoad2d() {
   ctx.restore();
 }
 
-// 3D carriageway: a flat grey ribbon at ground level, one quad per segment.
+// Build a flat ribbon along a centreline between two lateral offsets (o0..o1
+// metres from centre), at height h. Returns a flat position array (scene coords).
+function ribbonPos(c, o0, o1, h, cx, cz) {
+  const pos = [];
+  const P = (px, py) => [px - cx, h, -(py - cz)];
+  for (let i = 1; i < c.length; i++) {
+    const a = c[i - 1], b = c[i];
+    const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
+    const ux = -dy / len, uy = dx / len;
+    const aO = P(a.x + ux * o1, a.y + uy * o1), aI = P(a.x + ux * o0, a.y + uy * o0);
+    const bO = P(b.x + ux * o1, b.y + uy * o1), bI = P(b.x + ux * o0, b.y + uy * o0);
+    pos.push(...aO, ...aI, ...bI, ...aO, ...bI, ...bO);
+  }
+  return pos;
+}
+function ribbonMesh(pos, mat, recv) {
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+  geo.computeVertexNormals();
+  const m = new THREE.Mesh(geo, mat);
+  if (recv) m.receiveShadow = true;
+  return m;
+}
+
+// 3D estate street: kerbs + footways + carriageway (+ dashed centre line).
 function addRoad3d(scene, cx, cz) {
   const c = roadCenterline();
   if (c.length < 2) return;
   const hw = road.width / 2;
-  const pos = [];
-  const toScene = p => [p.x - cx, 0.12, -(p.y - cz)]; // flat, just above the site slab
-  for (let i = 1; i < c.length; i++) {
-    const a = c[i - 1], b = c[i];
-    const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
-    const nx = -dy / len * hw, ny = dx / len * hw; // perpendicular offset (editor space)
-    const aL = toScene({ x: a.x + nx, y: a.y + ny }), aR = toScene({ x: a.x - nx, y: a.y - ny });
-    const bL = toScene({ x: b.x + nx, y: b.y + ny }), bR = toScene({ x: b.x - nx, y: b.y - ny });
-    pos.push(...aL, ...aR, ...bR,  ...aL, ...bR, ...bL); // two triangles
+  const detailed = renderStyle !== 'pencil';
+  if (detailed) {
+    // kerb strips + footways flank the carriageway
+    const kerb = styleSurface(0xbfc1bb, { rough: 0.85, side: THREE.DoubleSide });
+    const foot = styleSurface(0x9a9c96, { rough: 0.95, side: THREE.DoubleSide, pencil: 0xe8e6de });
+    scene.add(ribbonMesh(ribbonPos(c,  hw,        hw + 0.15,  0.20, cx, cz), kerb));
+    scene.add(ribbonMesh(ribbonPos(c, -hw,       -hw - 0.15,  0.20, cx, cz), kerb));
+    scene.add(ribbonMesh(ribbonPos(c,  hw + 0.15, hw + 2.0,   0.17, cx, cz), foot, true));
+    scene.add(ribbonMesh(ribbonPos(c, -hw - 0.15,-hw - 2.0,   0.17, cx, cz), foot, true));
   }
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
-  geo.computeVertexNormals();
-  const mesh = new THREE.Mesh(geo, styleSurface(0x4f5358, { rough: 0.95, side: THREE.DoubleSide, pencil: 0xd6d3ca }));
-  mesh.receiveShadow = true;
-  scene.add(mesh);
+  // carriageway
+  const tar = styleSurface(0x36393e, { rough: 0.85, side: THREE.DoubleSide, pencil: 0xd6d3ca });
+  scene.add(ribbonMesh(ribbonPos(c, -hw, hw, 0.12, cx, cz), tar, true));
+  // dashed white centre line (rendered/hybrid)
+  if (detailed) {
+    const line = new THREE.MeshBasicMaterial({ color: 0xdedede });
+    for (let i = 1; i < c.length; i++) {
+      const a = c[i - 1], b = c[i];
+      const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
+      const steps = Math.floor(len / 4);
+      for (let s = 0; s < steps; s += 2) {
+        const t0 = s / steps, t1 = Math.min(1, (s + 1) / steps);
+        const seg = [{ x: a.x + dx * t0, y: a.y + dy * t0 }, { x: a.x + dx * t1, y: a.y + dy * t1 }];
+        scene.add(ribbonMesh(ribbonPos(seg, -0.12, 0.12, 0.135, cx, cz), line));
+      }
+    }
+  }
+}
+
+// Short driveway from each home's frontage to the carriageway edge.
+function addDriveways3d(scene, cx, cz) {
+  if (!dwellings.length || roadCenterline().length < 2) return;
+  const mat = styleSurface(0x8f9088, { rough: 0.95, side: THREE.DoubleSide, pencil: 0xe8e6de });
+  const hw = road.width / 2;
+  dwellings.forEach(dw => {
+    const fx = dw.frontX || 0, fy = dw.frontY || -1;
+    const front = { x: dw.cx + fx * (dw.d / 2), y: dw.cy + fy * (dw.d / 2) };
+    const tgt = nearestRoadPoint(front.x, front.y);
+    let dx = tgt.x - front.x, dy = tgt.y - front.y;
+    const dist = Math.hypot(dx, dy); if (dist < 1) return;
+    dx /= dist; dy /= dist;
+    const end = { x: front.x + dx * Math.max(0, dist - hw), y: front.y + dy * Math.max(0, dist - hw) };
+    const ux = -dy, uy = dx, w = 1.3;
+    const P = (px, py) => [px - cx, 0.15, -(py - cz)];
+    const pos = [
+      ...P(front.x + ux * w, front.y + uy * w), ...P(front.x - ux * w, front.y - uy * w), ...P(end.x - ux * w, end.y - uy * w),
+      ...P(front.x + ux * w, front.y + uy * w), ...P(end.x - ux * w, end.y - uy * w), ...P(end.x + ux * w, end.y + uy * w),
+    ];
+    scene.add(ribbonMesh(pos, mat, true));
+  });
 }
 
 /* ── TEMP: ACCESS DIAGNOSTIC (one-off, read-only) ─────────────
@@ -992,10 +1051,37 @@ function thinToTarget(list, target) {
   return kept;
 }
 
+// Auto-lay a sensible estate road: a spine from the access stub to the deepest
+// interior point, with one gentle bend, so a generated scheme always reads as a
+// street rather than a grid. Only runs when no road has been drawn.
+function autoRoad() {
+  if (!siteClosed || sitePts.length < 3 || !accessPt) return;
+  const stub = roadStubPoint();
+  if (!stub) return;
+  const b = boundaryBounds();
+  const clear = Math.max(12, road.width);
+  const cand = [];
+  for (let x = b.xMin; x <= b.xMax; x += 5)
+    for (let y = b.yMin; y <= b.yMax; y += 5)
+      if (pointInBoundary(x, y) && distToBoundary(x, y) > clear && !inAnySuds(x, y)) cand.push({ x, y });
+  if (!cand.length) { road.pts = []; return; }
+  // spine end = deepest-interior point farthest from the stub
+  let end = cand[0], best = -1;
+  for (const p of cand) { const d = Math.hypot(p.x - stub.x, p.y - stub.y); if (d > best) { best = d; end = p; } }
+  // bend point = interior point nearest the stub→end midpoint
+  const mid = { x: (stub.x + end.x) / 2, y: (stub.y + end.y) / 2 };
+  let m = end, md = Infinity;
+  for (const p of cand) { const d = Math.hypot(p.x - mid.x, p.y - mid.y); if (d < md) { md = d; m = p; } }
+  road.pts = (Math.hypot(m.x - stub.x, m.y - stub.y) > 15 && Math.hypot(end.x - m.x, end.y - m.y) > 15)
+    ? [{ x: m.x, y: m.y }, { x: end.x, y: end.y }]
+    : [{ x: end.x, y: end.y }];
+}
+
 // MAIN ENTRY — build the scheme from the current boundary/access/road.
 function generateScheme() {
   if (!siteClosed || sitePts.length < 3) { showToast('Close a site boundary first'); return; }
   const pattern = buildMixPattern();
+  if (genParams.autoRoad && roadCenterline().length < 2) autoRoad(); // ensure a street exists
   dwellings = []; // placeAlongRoad checks against `dwellings` via overlapsPlaced
   const candidates = roadCenterline().length >= 2 ? placeAlongRoad(pattern) : placeGrid(pattern);
   dwellings = thinToTarget(candidates, genParams.targetCount);
@@ -1186,12 +1272,12 @@ function texBoard() { // horizontal weatherboarding
 }
 function texTile() { // clay/slate rows of tiles (colourised via material tint)
   return _canvasTex('tile', 128, 128, (g, w, h) => {
-    g.fillStyle = '#b0b0b0'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#e2e2e2'; g.fillRect(0, 0, w, h);
     const th = 12, tw = 16, r = _rng(5);
     for (let row = 0, y = 0; y < h; y += th, row++) {
       const off = (row % 2) * (tw / 2);
       for (let x = -tw; x < w; x += tw) {
-        const v = 150 + Math.floor(r() * 80);
+        const v = 205 + Math.floor(r() * 50);
         g.fillStyle = `rgb(${v},${v},${v})`;
         g.beginPath();
         g.moveTo(x + off, y + th); g.lineTo(x + off, y + 3);
@@ -1417,8 +1503,8 @@ function addHouse3d(scene, dw, cx, cz) {
     const pvSign = localZ.y < 0 ? 1 : -1; // +Z slope faces south when localZ.y < 0
     const pitch  = Math.atan2(rise, dw.d / 2);
     const slopeLen = Math.hypot(dw.d / 2, rise);
-    const pv = new THREE.Mesh(new THREE.BoxGeometry(dw.w * 0.8, 0.08, slopeLen * 0.68),
-      styleSurface(0x0e1f38, { glass: true, metal: 0.2, rough: 0.15, pencil: 0xccced2 }));
+    const pv = new THREE.Mesh(new THREE.BoxGeometry(dw.w * 0.55, 0.08, slopeLen * 0.5),
+      styleSurface(0x1b2733, { glass: true, metal: 0.15, rough: 0.28, pencil: 0xccced2 }));
     pv.position.set(0, eave + rise * 0.5 + 0.08, pvSign * (dw.d / 4));
     pv.rotation.x = pvSign * -pitch;
     grp.add(pv);
@@ -2515,7 +2601,7 @@ function build3d() {
   r3.shadowMap.enabled = (renderStyle === 'rendered');
   r3.shadowMap.type    = THREE.PCFSoftShadowMap;
   r3.toneMapping       = (renderStyle === 'rendered') ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
-  r3.toneMappingExposure = 1.05;
+  r3.toneMappingExposure = 0.98;
   if ('outputEncoding' in r3) r3.outputEncoding = THREE.sRGBEncoding; // three r128
 
   s3 = new THREE.Scene();
@@ -2523,9 +2609,9 @@ function build3d() {
     s3.background = skyEquirect();          // gradient sky with sun glow
     s3.environment = envMap(r3);            // IBL: realistic PBR reflections + ambient
     s3.fog = new THREE.Fog(0xcdddf0, 620, 1700);
-    s3.add(new THREE.HemisphereLight(0xdff0ff, 0x4a3b28, 0.55)); // sky + earth bounce
-    const sun = new THREE.DirectionalLight(0xfff1cf, 1.35);      // warm sun, low
-    sun.position.set(150, 165, 120);
+    s3.add(new THREE.HemisphereLight(0xdff0ff, 0x4a3b28, 0.45)); // sky + earth bounce
+    const sun = new THREE.DirectionalLight(0xffedc4, 1.7);       // warm sun, low for long shadows
+    sun.position.set(190, 125, 90);
     sun.castShadow = true;
     sun.shadow.mapSize.set(4096, 4096);
     sun.shadow.camera.near = 10; sun.shadow.camera.far = 800;
@@ -2613,6 +2699,7 @@ function build3d() {
     addSuds3d(s3, cx, cz);
     addDwellings3d(s3, cx, cz);
     addRoad3d(s3, cx, cz);
+    addDriveways3d(s3, cx, cz);
     addVegetation3d(s3, cx, cz);
   }
   addEntrance3d(s3, cx, cz);
