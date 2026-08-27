@@ -20,6 +20,11 @@ export function MassingViewer({ project, concept, onCanvasReady }: MassingViewer
   const hostRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Keep the latest callback without making it an effect dependency, so an
+  // inline arrow from the parent does not rebuild the renderer every render.
+  const readyRef = useRef(onCanvasReady);
+  readyRef.current = onCanvasReady;
+
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
@@ -33,16 +38,25 @@ export function MassingViewer({ project, concept, onCanvasReady }: MassingViewer
     }
 
     setError(null);
-    renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.setPixelRatio(Math.min(1.5, window.devicePixelRatio || 1));
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.0;
+    renderer.toneMappingExposure = 1.02;
     host.appendChild(renderer.domElement);
     renderer.domElement.style.display = 'block';
-    onCanvasReady?.(renderer.domElement);
+    readyRef.current?.(renderer.domElement);
 
+    let raf = 0;
+    let disposed = false;
     const { scene, camera, dispose } = buildScene(project, concept);
+
+    // Coalesced render-on-demand: many requests in one frame produce one render.
+    const requestRender = () => {
+      if (raf || disposed) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        renderer.render(scene, camera);
+      });
+    };
 
     // Orbit state derived from the camera's initial framing.
     const target = new THREE.Vector3(concept.footprint.x, 3, -concept.footprint.y);
@@ -58,6 +72,7 @@ export function MassingViewer({ project, concept, onCanvasReady }: MassingViewer
         target.z + radius * Math.sin(phi) * Math.cos(theta),
       );
       camera.lookAt(target);
+      requestRender();
     };
     applyCamera();
 
@@ -90,37 +105,48 @@ export function MassingViewer({ project, concept, onCanvasReady }: MassingViewer
     renderer.domElement.addEventListener('pointerup', onUp);
     renderer.domElement.addEventListener('wheel', onWheel, { passive: false });
 
+    const onContextLost = (e: Event) => {
+      e.preventDefault();
+      disposed = true;
+      if (raf) cancelAnimationFrame(raf);
+      setError('The 3D view lost its graphics context. Switch views and back to retry.');
+    };
+    renderer.domElement.addEventListener('webglcontextlost', onContextLost, false);
+
+    let lastW = 0;
+    let lastH = 0;
     const resize = () => {
       const r = host.getBoundingClientRect();
-      const w = Math.max(240, r.width);
-      const h = Math.max(200, r.height);
-      renderer.setSize(w, h, false);
+      const w = Math.max(240, Math.round(r.width));
+      const h = Math.max(200, Math.round(r.height));
+      if (w === lastW && h === lastH) return; // ignore no-op observer callbacks
+      lastW = w;
+      lastH = h;
+      // updateStyle=true keeps the canvas CSS size equal to the host, so it can
+      // never overflow and grow an ancestor (which would loop the observer).
+      renderer.setSize(w, h, true);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
+      requestRender();
     };
     resize();
     const ro = new ResizeObserver(resize);
     ro.observe(host);
 
-    let raf = 0;
-    const loop = () => {
-      raf = requestAnimationFrame(loop);
-      renderer.render(scene, camera);
-    };
-    loop();
-
     return () => {
-      cancelAnimationFrame(raf);
+      disposed = true;
+      if (raf) cancelAnimationFrame(raf);
       ro.disconnect();
       renderer.domElement.removeEventListener('pointerdown', onDown);
       renderer.domElement.removeEventListener('pointermove', onMove);
       renderer.domElement.removeEventListener('pointerup', onUp);
       renderer.domElement.removeEventListener('wheel', onWheel);
+      renderer.domElement.removeEventListener('webglcontextlost', onContextLost);
       dispose();
       renderer.dispose();
       renderer.domElement.remove();
     };
-  }, [project, concept, onCanvasReady]);
+  }, [project, concept]);
 
   if (error) {
     return (

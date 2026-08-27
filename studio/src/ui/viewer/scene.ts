@@ -46,7 +46,6 @@ function groundPlane(points: readonly Point[], colour: number, y: number): THREE
   );
   mesh.rotation.x = -Math.PI / 2;
   mesh.position.y = y;
-  mesh.receiveShadow = true;
   return mesh;
 }
 
@@ -70,7 +69,6 @@ function pitchedRoof(w: number, d: number, eave: number, rise: number, colour: n
     geo,
     new THREE.MeshStandardMaterial({ color: colour, roughness: 0.8, side: THREE.DoubleSide }),
   );
-  mesh.castShadow = true;
   return mesh;
 }
 
@@ -86,20 +84,17 @@ export function buildScene(project: Project, concept: Concept): SceneHandles {
     else disposables.push(o.material);
   };
 
-  // Lighting: warm low sun plus sky/earth bounce.
-  scene.add(new THREE.HemisphereLight(0xdff0ff, 0x53452f, 0.72));
-  const sun = new THREE.DirectionalLight(0xfff0d0, 1.45);
+  // Lighting: warm low sun plus sky/earth bounce. Real-time shadow mapping is
+  // deliberately NOT used - it is the heaviest part of the pipeline and can wedge
+  // older GPUs. A cheap baked contact shadow under the building gives grounding
+  // instead (added below).
+  scene.add(new THREE.HemisphereLight(0xdff0ff, 0x53452f, 0.85));
+  const sun = new THREE.DirectionalLight(0xfff0d0, 1.35);
   sun.position.set(90, 110, 60);
-  sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
-  sun.shadow.camera.near = 5;
-  sun.shadow.camera.far = 500;
-  sun.shadow.camera.left = -140;
-  sun.shadow.camera.right = 140;
-  sun.shadow.camera.top = 140;
-  sun.shadow.camera.bottom = -140;
-  sun.shadow.bias = -0.0004;
   scene.add(sun);
+  const fill = new THREE.DirectionalLight(0xbfd4ef, 0.35);
+  fill.position.set(-70, 50, -40);
+  scene.add(fill);
 
   // Surrounding context ground.
   const context = new THREE.Mesh(
@@ -108,7 +103,6 @@ export function buildScene(project: Project, concept: Concept): SceneHandles {
   );
   context.rotation.x = -Math.PI / 2;
   context.position.y = -0.12;
-  context.receiveShadow = true;
   scene.add(context);
   track(context);
 
@@ -160,7 +154,6 @@ export function buildScene(project: Project, concept: Concept): SceneHandles {
       strip.rotation.x = -Math.PI / 2;
       strip.rotation.z = -Math.atan2(b.y - a.y, b.x - a.x) + Math.PI / 2;
       strip.position.set((a.x + b.x) / 2, 0.05, -(a.y + b.y) / 2);
-      strip.receiveShadow = true;
       scene.add(strip);
       track(strip);
     }
@@ -174,7 +167,6 @@ export function buildScene(project: Project, concept: Concept): SceneHandles {
     mesh.rotation.x = -Math.PI / 2;
     mesh.rotation.z = -(bay.rotationDeg * Math.PI) / 180;
     mesh.position.set(bay.x, 0.07, -bay.y);
-    mesh.receiveShadow = true;
     scene.add(mesh);
     track(mesh);
   }
@@ -193,8 +185,6 @@ export function buildScene(project: Project, concept: Concept): SceneHandles {
     new THREE.MeshStandardMaterial({ color: WALL_COLOURS[concept.materials.wall], roughness: 0.9 }),
   );
   walls.position.y = eave / 2;
-  walls.castShadow = true;
-  walls.receiveShadow = true;
   group.add(walls);
   track(walls);
 
@@ -215,6 +205,28 @@ export function buildScene(project: Project, concept: Concept): SceneHandles {
     disposables.push(band.geometry);
   }
   disposables.push(glass);
+
+  // Cheap contact shadow: a radial-gradient sprite laid flat under the building.
+  const shadowCanvas = document.createElement('canvas');
+  shadowCanvas.width = 128;
+  shadowCanvas.height = 128;
+  const sctx = shadowCanvas.getContext('2d');
+  if (sctx) {
+    const grad = sctx.createRadialGradient(64, 64, 6, 64, 64, 62);
+    grad.addColorStop(0, 'rgba(0,0,0,0.42)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    sctx.fillStyle = grad;
+    sctx.fillRect(0, 0, 128, 128);
+  }
+  const shadowTex = new THREE.CanvasTexture(shadowCanvas);
+  const shadowMesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(fp.w * 1.7, fp.d * 1.7),
+    new THREE.MeshBasicMaterial({ map: shadowTex, transparent: true, depthWrite: false }),
+  );
+  shadowMesh.rotation.x = -Math.PI / 2;
+  shadowMesh.position.set(fp.x, 0.04, -fp.y);
+  scene.add(shadowMesh);
+  disposables.push(shadowMesh.geometry, shadowMesh.material, shadowTex);
 
   scene.add(group);
 
