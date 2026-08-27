@@ -6,7 +6,6 @@ import { NewProjectScreen } from './routes/NewProjectScreen';
 import { StudioScreen } from './routes/StudioScreen';
 import { CompareScreen } from './routes/CompareScreen';
 import { ExportScreen } from './routes/ExportScreen';
-import { SHORT_DISCLAIMER } from './domain/disclaimer';
 import { Spinner } from './ui/primitives';
 import './app/app.css';
 
@@ -85,12 +84,6 @@ export function App() {
         {route.name === 'compare' && <CompareScreen />}
         {route.name === 'export' && <ExportScreen />}
       </main>
-
-      {route.name === 'projects' && (
-        <footer className="page" style={{ paddingTop: 0 }}>
-          <p className="disclaimer">{SHORT_DISCLAIMER}</p>
-        </footer>
-      )}
     </div>
   );
 }
