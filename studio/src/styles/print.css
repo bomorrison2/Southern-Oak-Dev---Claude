@@ -1,0 +1,74 @@
+/* Print styles for the exported project pack.
+   The pack is designed for A4 portrait and "Save as PDF" from the browser. */
+
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 16mm 14mm;
+  }
+
+  body {
+    background: #fff !important;
+    color: #14171a !important;
+  }
+
+  .topbar,
+  .no-print {
+    display: none !important;
+  }
+
+  .page {
+    max-width: none;
+    padding: 0;
+  }
+
+  .pack {
+    color: #14171a;
+  }
+  .pack__section {
+    break-inside: avoid;
+    border-color: #d6dae0 !important;
+    background: #fff !important;
+  }
+  .pack__figure img {
+    max-width: 100%;
+    height: auto;
+  }
+  .pack h1,
+  .pack h2,
+  .pack h3 {
+    color: #14171a;
+  }
+  .pack .muted,
+  .pack .faint {
+    color: #4c545e !important;
+  }
+  .pack__section + .pack__section {
+    margin-top: 10mm;
+  }
+  a[href]::after {
+    content: '';
+  }
+}
+
+/* Screen presentation of the pack, so what you see matches what prints. */
+.pack { max-width: 900px; margin: 0 auto; }
+.pack__section {
+  padding: var(--s5);
+  margin-bottom: var(--s4);
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.pack__figure {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--surface-0);
+}
+.pack__figure img { display: block; width: 100%; }
+.pack__caption { font-size: 12px; color: var(--text-faint); padding: var(--s2) var(--s3); }
+.pack__table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.pack__table th,
+.pack__table td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+.pack__table th { color: var(--text-dim); font-weight: 500; width: 46%; }

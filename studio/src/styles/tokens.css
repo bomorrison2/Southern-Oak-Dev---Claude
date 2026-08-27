@@ -1,0 +1,64 @@
+/* ArchForm Studio design tokens.
+   Restrained neutral palette with a single confident accent, carried forward
+   from the ArchForm prototype so the two tools feel related. */
+
+:root {
+  /* Surfaces, darkest to lightest */
+  --surface-0: #1c1f23;
+  --surface-1: #23262b;
+  --surface-2: #2b2f35;
+  --surface-3: #343941;
+  --surface-4: #404650;
+
+  /* Accent */
+  --accent: #4d8fff;
+  --accent-hover: #6ba3ff;
+  --accent-quiet: rgba(77, 143, 255, 0.14);
+  --accent-line: rgba(77, 143, 255, 0.42);
+
+  /* Semantic */
+  --positive: #2fbf76;
+  --warning: #e0a03c;
+  --danger: #e4574f;
+  --danger-quiet: rgba(228, 87, 79, 0.12);
+
+  /* Ink */
+  --text: #eef1f5;
+  --text-dim: rgba(238, 241, 245, 0.68);
+  --text-faint: rgba(238, 241, 245, 0.42);
+
+  /* Lines */
+  --line: rgba(255, 255, 255, 0.09);
+  --line-strong: rgba(255, 255, 255, 0.16);
+
+  /* Type */
+  --font-body: 'DM Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'DM Mono', ui-monospace, 'SFMono-Regular', Consolas, monospace;
+
+  /* Spacing scale */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+  --s7: 48px;
+
+  --radius: 8px;
+  --radius-sm: 5px;
+  --shadow: 0 6px 24px rgba(0, 0, 0, 0.34);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.24);
+
+  --panel-left: 268px;
+  --panel-right: 320px;
+  --header-h: 56px;
+
+  /* Plan drawing colours, shared by canvas and 3D */
+  --plot-line: #6fa8ff;
+  --plot-fill: rgba(111, 168, 255, 0.08);
+  --envelope: rgba(47, 191, 118, 0.5);
+  --exclusion: rgba(228, 87, 79, 0.34);
+  --building: #d8a05a;
+  --parking: #8b93a1;
+  --amenity: rgba(47, 191, 118, 0.16);
+}

@@ -1,0 +1,110 @@
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* The main region owns scrolling so the studio can size to the viewport
+   exactly, while document-style pages scroll normally. */
+.main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: auto;
+}
+.main--fixed { overflow: hidden; }
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  height: var(--header-h);
+  padding: 0 var(--s4);
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.brand:hover { text-decoration: none; }
+.brand__mark {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--accent);
+  border-radius: 3px;
+  position: relative;
+}
+.brand__mark::after {
+  content: '';
+  position: absolute;
+  inset: 3px 3px auto auto;
+  width: 6px;
+  height: 6px;
+  background: var(--accent);
+}
+.topbar__spacer { flex: 1; }
+.topbar__actions { display: flex; align-items: center; gap: var(--s2); }
+
+.savechip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-faint);
+  min-width: 92px;
+}
+
+.page { flex: 1; padding: var(--s6) var(--s5); max-width: 1180px; width: 100%; margin: 0 auto; }
+.page__head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--s4); margin-bottom: var(--s5); flex-wrap: wrap; }
+.page__sub { color: var(--text-dim); margin-top: 4px; }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); gap: var(--s4); }
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  padding: var(--s4);
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.14s ease, transform 0.14s ease;
+}
+.card:hover { border-color: var(--accent-line); transform: translateY(-1px); }
+.card__name { font-weight: 700; font-size: 15px; }
+.card__addr { font-size: 12px; color: var(--text-dim); }
+.card__stats { display: flex; gap: var(--s4); margin-top: auto; }
+.card__stat-val { font-family: var(--font-mono); font-size: 15px; }
+.card__stat-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-faint); }
+.card__foot { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); }
+
+.disclaimer {
+  margin-top: var(--s6);
+  padding-top: var(--s4);
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--text-faint);
+  line-height: 1.6;
+}
+
+.form-narrow { max-width: 620px; }
+
+@media (max-width: 720px) {
+  .page { padding: var(--s4) var(--s3); }
+  .topbar { gap: var(--s2); padding: 0 var(--s3); }
+  .savechip { display: none; }
+}
+
+/* On narrow screens the studio stacks vertically and can exceed the viewport,
+   so the main region must scroll rather than clip the panels. */
+@media (max-width: 900px) {
+  .main--fixed { overflow: auto; }
+}
