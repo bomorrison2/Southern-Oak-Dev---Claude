@@ -210,6 +210,9 @@
         <div class="stat-box"><div class="stat-val"       id="sRoad">0</div><div class="stat-label">Road m²</div></div>
         <div class="stat-box"><div class="stat-val"       id="sSuds">0</div><div class="stat-label">SuDS m²</div></div>
         <div class="stat-box"><div class="stat-val"       id="sSolar">0</div><div class="stat-label">PV roof m²</div></div>
+        <div class="stat-box"><div class="stat-val"       id="sAvgPlot">0</div><div class="stat-label">Avg plot m²</div></div>
+        <div class="stat-box"><div class="stat-val"       id="sAvgGarden">0</div><div class="stat-label">Avg garden m²</div></div>
+        <div class="stat-box"><div class="stat-val"       id="sPlotted">0</div><div class="stat-label">Plotted</div></div>
         <div class="stat-box"><div class="stat-val"       id="sBuild">0</div><div class="stat-label">Footprint m²</div></div>
         <div class="stat-box"><div class="stat-val green" id="sGFA">0</div><div class="stat-label">GFA m²</div></div>
         <div class="stat-box"><div class="stat-val"       id="sFAR">0.0</div><div class="stat-label">FAR</div></div>
@@ -290,6 +293,12 @@
         </div>
         <input type="range" class="slider" id="setbackSlider"
                min="2" max="15" value="6" step="0.5" oninput="onGenParam('frontSetback', this.value)"/>
+        <div class="ctrl-row" style="margin-top:10px">
+          <span class="ctrl-label">Rear garden</span>
+          <span class="ctrl-val" id="rearGardenLabel">10m</span>
+        </div>
+        <input type="range" class="slider" id="rearGardenSlider"
+               min="4" max="20" value="10" step="0.5" oninput="onGenParam('rearGarden', this.value)"/>
         <div class="ctrl-row" style="margin-top:10px">
           <span class="ctrl-label">Heritage buffer · E</span>
           <span class="ctrl-val" id="bufferELabel">15m</span>

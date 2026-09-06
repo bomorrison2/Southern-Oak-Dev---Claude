@@ -101,6 +101,7 @@ let genParams = {
   bufferE:      15,  // m no-build heritage buffer on the EAST (Sayerlands House)
   bufferW:      12,  // m no-build landscape buffer on the WEST (Cuckoo Trail)
   boundaryInset: 6,  // m general no-build inset from the boundary line
+  rearGarden:   10,  // m private rear-garden depth behind each home (plot subdivision)
   targetCount:  24,  // desired dwelling count — default targets the defensible ~19–25 dw/ha band
   solar:        true,// roof-integrated PV on the south-facing slopes
   autoRoad:     true,// auto-lay an estate road spine when none is drawn
@@ -952,6 +953,146 @@ function overlapsPlaced(cx, cy, w, d) {
   return false;
 }
 
+/* ── PLOT SUBDIVISION ─────────────────────────────────────── */
+// Turns each dwelling footprint into a real residential PLOT: a frontage-width
+// strip running from the carriageway edge back past the house to a private rear
+// garden. This is what makes a layout read as a designed street rather than
+// scattered footprints, and it lets us measure plot and garden areas honestly.
+//
+// Rear-garden depth is an INDICATIVE, adjustable default. Policy HaHD 1(2)(h)
+// (Hailsham NP submission version, March 2026) requires private outdoor amenity
+// space and says garden depths "should respond to adjacent plots and building
+// lines" — it sets no fixed figure. Nothing here is a policy standard, and a
+// plot is not a legal title boundary.
+
+// Convex-polygon overlap by the separating-axis test. Plots are convex quads.
+// TOL matters: neighbouring plots legitimately SHARE a boundary line (and
+// terraces abut with no gap at all), so a contact — or a sliver of overlap
+// smaller than TOL — must read as "not overlapping". Without this, every second
+// plot along a frontage is rejected for touching its neighbour.
+function convexOverlap(A, B) {
+  const TOL = 0.05; // metres of permitted contact/penetration
+  for (const poly of [A, B]) {
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i], b = poly[(i + 1) % poly.length];
+      let nx = -(b.y - a.y), ny = b.x - a.x;     // edge normal
+      const len = Math.hypot(nx, ny) || 1;
+      nx /= len; ny /= len;                      // normalise so TOL is in metres
+      let minA = Infinity, maxA = -Infinity, minB = Infinity, maxB = -Infinity;
+      for (const p of A) { const d = p.x * nx + p.y * ny; if (d < minA) minA = d; if (d > maxA) maxA = d; }
+      for (const p of B) { const d = p.x * nx + p.y * ny; if (d < minB) minB = d; if (d > maxB) maxB = d; }
+      if (maxA - minB < TOL || maxB - minA < TOL) return false; // separated (or merely touching)
+    }
+  }
+  return true;
+}
+
+// The plot quad for one dwelling at a given rear-garden depth and side margin.
+// Front edge sits on the carriageway edge; the side edges split the sideGap with
+// the neighbour, so adjacent plots share a line rather than overlapping.
+// `sideMargin` defaults to half the side gap but can be narrowed where the
+// placement packed homes tighter than a full plot width — real plots vary in
+// width, so a narrower plot is preferable to no plot at all.
+function plotQuad(dw, rear, sideMargin) {
+  const t  = { x: Math.cos(dw.rot), y: Math.sin(dw.rot) };  // frontage axis
+  const f  = { x: dw.frontX, y: dw.frontY };                // unit vector toward the road
+  const m  = (sideMargin === undefined) ? genParams.sideGap / 2 : sideMargin;
+  const hw = dw.w / 2 + m;
+  const front = dw.d / 2 + genParams.frontSetback;          // centre → carriageway edge
+  return [
+    { x: dw.cx + t.x * hw + f.x * front, y: dw.cy + t.y * hw + f.y * front },
+    { x: dw.cx - t.x * hw + f.x * front, y: dw.cy - t.y * hw + f.y * front },
+    { x: dw.cx - t.x * hw - f.x * rear,  y: dw.cy - t.y * hw - f.y * rear  },
+    { x: dw.cx + t.x * hw - f.x * rear,  y: dw.cy + t.y * hw - f.y * rear  },
+  ];
+}
+
+// A plot must sit inside the boundary and clear of both buffers. Gardens may sit
+// closer to the boundary line than buildings, so only half the building inset is
+// applied here (the full inset still governs the house via footprintValid()).
+function plotFits(q) {
+  const b = boundaryBounds();
+  for (const c of q) {
+    if (!pointInBoundary(c.x, c.y)) return false;
+    if (distToBoundary(c.x, c.y) < genParams.boundaryInset * 0.5) return false;
+    if (c.x > b.xMax - genParams.bufferE) return false;
+    if (c.x < b.xMin + genParams.bufferW) return false;
+  }
+  return true;
+}
+
+// Give every dwelling a plot, shrinking the rear garden until it fits the site
+// and clears every plot already allocated. Homes that cannot hold a minimum
+// garden keep no plot rather than being given a false one.
+// The side margin a plot may claim: half the real gap to its nearest neighbour
+// in the same row, capped at half the design side gap. Deriving it from the
+// actual spacing puts the plot boundary on the midpoint between two houses —
+// which is how plot boundaries work — and stops the first home processed from
+// claiming space its neighbour then cannot have. Terraces abut, so the gap is
+// zero and the boundary runs down the party wall.
+function sideMarginFor(i) {
+  const dw = dwellings[i];
+  const t = { x: Math.cos(dw.rot), y: Math.sin(dw.rot) };
+  const f = { x: dw.frontX, y: dw.frontY };
+  let margin = genParams.sideGap / 2;
+  dwellings.forEach((o, j) => {
+    if (j === i || o.frontX === undefined) return;
+    if (o.frontX * f.x + o.frontY * f.y < 0.9) return;      // must face the same way
+    const dx = o.cx - dw.cx, dy = o.cy - dw.cy;
+    const across = Math.abs(dx * f.x + dy * f.y);
+    if (across > 2) return;                                  // not in this row
+    const along = Math.abs(dx * t.x + dy * t.y);
+    const faceGap = along - (dw.w + o.w) / 2;                // clear space between walls
+    margin = Math.min(margin, Math.max(0, faceGap / 2));
+  });
+  return margin;
+}
+
+function buildPlots() {
+  const MIN_REAR = 4;
+  const want = Math.max(MIN_REAR, genParams.rearGarden);
+  dwellings.forEach(dw => { dw.plot = null; dw.rearDepth = 0; });
+  dwellings.forEach((dw, i) => {
+    if (dw.frontX === undefined || dw.frontY === undefined) return; // grid fallback: no frontage axis
+    const m = sideMarginFor(i);
+    // Width is now fixed by the neighbours; only garden depth is traded away.
+    for (let rear = want; rear >= MIN_REAR; rear -= 0.5) {
+      const q = plotQuad(dw, rear, m);
+      if (!plotFits(q)) continue;
+      if (dwellings.some((o, j) => j !== i && o.plot && convexOverlap(q, o.plot))) continue;
+      dw.plot = q; dw.rearDepth = rear; dw.sideMargin = m;
+      break;
+    }
+  });
+}
+
+function plotAreaM2()   { return dwellings.reduce((s, d) => s + (d.plot ? polyArea(d.plot) : 0), 0); }
+function gardenAreaM2() { return dwellings.reduce((s, d) => s + (d.plot ? Math.max(0, polyArea(d.plot) - d.w * d.d) : 0), 0); }
+function plottedCount() { return dwellings.filter(d => d.plot).length; }
+
+// 2D: plot boundaries as dashed lines with a light garden tint, drawn under the
+// house footprints so the street structure reads first.
+function drawPlots2d() {
+  if (!dwellings.length) return;
+  ctx.save();
+  ctx.setLineDash([4, 3]);
+  dwellings.forEach(dw => {
+    if (!dw.plot) return;
+    const s = dw.plot.map(p => w2s(p.x, p.y));
+    ctx.beginPath();
+    ctx.moveTo(s[0].x, s[0].y);
+    for (let i = 1; i < s.length; i++) ctx.lineTo(s[i].x, s[i].y);
+    ctx.closePath();
+    ctx.fillStyle   = 'rgba(0,232,122,0.07)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.34)';
+    ctx.lineWidth   = 1;
+    ctx.fill();
+    ctx.stroke();
+  });
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
 // Expand the weighted HOUSE_MIX into a repeating type pattern (length ~24) so
 // attempts sample the mix in proportion.
 function buildMixPattern() {
@@ -1086,6 +1227,7 @@ function generateScheme() {
   const candidates = roadCenterline().length >= 2 ? placeAlongRoad(pattern) : placeGrid(pattern);
   dwellings = thinToTarget(candidates, genParams.targetCount);
   assignAppearance(dwellings);
+  buildPlots(); // subdivide into plots + private gardens once the homes are final
   placedDwellings = dwellings.length;
 
   const lbl = document.getElementById('dwellingCountLabel');
@@ -1127,7 +1269,8 @@ function onToggleSolar() {
 // Sidebar: setback / buffer sliders — regenerate live so the effect is visible.
 function onGenParam(which, v) {
   genParams[which] = +v;
-  const labels = { frontSetback: 'setbackLabel', bufferE: 'bufferELabel', bufferW: 'bufferWLabel' };
+  const labels = { frontSetback: 'setbackLabel', bufferE: 'bufferELabel', bufferW: 'bufferWLabel',
+                   rearGarden: 'rearGardenLabel' };
   const el = document.getElementById(labels[which]);
   if (el) el.textContent = v + 'm';
   if (siteClosed && sitePts.length >= 3 && dwellings.length) generateScheme();
@@ -1151,6 +1294,7 @@ function syncGenUI() {
   set('setbackSlider', genParams.frontSetback); txt('setbackLabel', genParams.frontSetback + 'm');
   set('bufferESlider', genParams.bufferE);      txt('bufferELabel', genParams.bufferE + 'm');
   set('bufferWSlider', genParams.bufferW);      txt('bufferWLabel', genParams.bufferW + 'm');
+  set('rearGardenSlider', genParams.rearGarden); txt('rearGardenLabel', genParams.rearGarden + 'm');
   const solarBtn = document.getElementById('solarBtn');
   if (solarBtn) {
     solarBtn.classList.toggle('active', genParams.solar);
@@ -1738,6 +1882,22 @@ function updateStats() {
   const solarEl = document.getElementById('sSolar');
   if (solarEl) solarEl.textContent = Math.round(solarRoofM2());
 
+  // ── Plots and private gardens (from the plot subdivision) ──
+  const nPlot   = plottedCount();
+  const avgPlot = nPlot ? plotAreaM2()   / nPlot : 0;
+  const avgGdn  = nPlot ? gardenAreaM2() / nPlot : 0;
+  const plotEl  = document.getElementById('sAvgPlot');
+  const gdnEl   = document.getElementById('sAvgGarden');
+  const pcEl    = document.getElementById('sPlotted');
+  if (plotEl) plotEl.textContent = avgPlot > 0 ? Math.round(avgPlot) : 0;
+  if (gdnEl)  gdnEl.textContent  = avgGdn  > 0 ? Math.round(avgGdn)  : 0;
+  // Flag when homes could not be given a full plot — honest, not hidden.
+  if (pcEl) {
+    pcEl.textContent = dwellings.length ? `${nPlot}/${dwellings.length}` : '0';
+    pcEl.classList.remove('warn');
+    if (dwellings.length && nPlot < dwellings.length) pcEl.classList.add('warn');
+  }
+
   // ── Density honesty: flag when net density leaves the defensible band ──
   // ~19–25 dw/ha net fits the landscape-led SHELAA narrative; >25 contradicts it.
   const densEl = document.getElementById('sDensity');
@@ -2090,6 +2250,7 @@ function render() {
   drawRoad2d();
 
   // Generated homes — drawn over the road so frontages read clearly
+  drawPlots2d();
   drawDwellings2d();
 
   // Access stub / visibility splay (drawn under the entrance marker)
