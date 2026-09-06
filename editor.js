@@ -124,9 +124,84 @@ let accessSplay     = { length: 20, halfWidth: 8 };
 // Centreline polyline drawn from the access stub into the site. `pts` holds the
 // user-placed vertices AFTER the stub start (the stub end is always prepended,
 // so the road stays snapped to the access). width = carriageway width (metres).
-let road        = { pts: [], width: 5 };
+let road        = { pts: [], width: 5, type: 'spine' };
 let drawingRoad = false; // true while laying out the polyline (click to add, dbl-click/Esc to finish)
 const ROAD_COL  = '#6b6b6b'; // carriageway grey
+
+/* ── STREET HIERARCHY ─────────────────────────────────────── */
+// Policy HaHD 6(2) (Hailsham NP submission, March 2026) requires "a hierarchy of
+// streets ... integrated within development areas". Guideline STP-01 sets the
+// design rules these types follow: residential streets designed to a 20mph
+// maximum, footways alongside all streets a MINIMUM 2.0m wide, green
+// infrastructure between carriageway and footway, and engineered traffic calming
+// (humps, cushions, chicanes) designed out rather than added.
+//
+// Carriageway widths below are INDICATIVE defaults for massing and area take.
+// STP-01(2) says street dimensions "should be as defined in Figure 59 through to
+// Figure 61" of the Design Guidelines — those are drawings, so the exact widths
+// must be read off them and confirmed against ESCC standards before any
+// application. Not a specification.
+const ROAD_TYPES = {
+  spine:     { label: 'Primary street',       width: 5.5, footway: 2.0, color: '#6b6b6b' },
+  secondary: { label: 'Secondary street',     width: 4.8, footway: 2.0, color: '#767471' },
+  lane:      { label: 'Shared-surface lane',  width: 4.0, footway: 0,   color: '#8a8378' },
+};
+// Secondary streets and lanes hanging off the spine. Each: { id, type, pts }
+// where pts[0] is the junction point ON the spine. The spine itself stays in
+// `road` so existing saved projects keep loading unchanged.
+let branches = [];
+
+// Every street in the scheme as { pts, width, type, footway }, spine first.
+function allRoads() {
+  const out = [];
+  const spine = roadCenterline();
+  if (spine.length >= 2) {
+    out.push({ pts: spine, width: road.width, type: road.type || 'spine',
+               footway: ROAD_TYPES[road.type || 'spine'].footway });
+  }
+  branches.forEach(b => {
+    if (b.pts && b.pts.length >= 2) {
+      const t = ROAD_TYPES[b.type] || ROAD_TYPES.lane;
+      out.push({ pts: b.pts, width: t.width, type: b.type, footway: t.footway });
+    }
+  });
+  return out;
+}
+
+// Shortest distance from a point to one polyline.
+function distToCenterline(px, py, pts) {
+  let best = Infinity;
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i];
+    const dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy;
+    let t = len2 > 0 ? ((px - a.x) * dx + (py - a.y) * dy) / len2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    const d = Math.hypot(px - (a.x + t * dx), py - (a.y + t * dy));
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+// True if a point sits on, or within `margin` of, ANY carriageway — each street
+// measured against its own width, so a narrow lane does not sterilise as much
+// land as the spine.
+function onAnyCarriageway(px, py, margin) {
+  const m = margin === undefined ? 0.5 : margin;
+  for (const r of allRoads()) {
+    if (distToCenterline(px, py, r.pts) < r.width / 2 + m) return true;
+  }
+  return false;
+}
+
+function streetLengths() {
+  const by = {};
+  allRoads().forEach(r => {
+    let L = 0;
+    for (let i = 1; i < r.pts.length; i++) L += Math.hypot(r.pts[i].x - r.pts[i - 1].x, r.pts[i].y - r.pts[i - 1].y);
+    by[r.type] = (by[r.type] || 0) + L;
+  });
+  return by;
+}
 
 /* ── TEMP: ACCESS DIAGNOSTIC (one-off, read-only — safe to delete this block,
    the render-overlay hook, and the two runAccessDiagnostic() calls) ───────── */
@@ -411,9 +486,16 @@ function roadLengthM() {
   return L;
 }
 
-// Carriageway area ≈ centreline length × width (corner overlaps ignored — a
-// planning estimate). Feeds the net developable area in updateStats().
-function roadAreaM2() { return roadLengthM() * road.width; }
+// Carriageway area ≈ Σ (centreline length × width) across the whole hierarchy
+// (corner overlaps at junctions ignored — a planning estimate, slightly
+// conservative). Feeds the net developable area in updateStats().
+function roadAreaM2() {
+  return allRoads().reduce((s, r) => {
+    let L = 0;
+    for (let i = 1; i < r.pts.length; i++) L += Math.hypot(r.pts[i].x - r.pts[i - 1].x, r.pts[i].y - r.pts[i - 1].y);
+    return s + L * r.width;
+  }, 0);
+}
 
 // Enter road-draw mode. Drawing happens in 2D, so drop to 2D first.
 function toggleDrawRoad() {
@@ -442,7 +524,7 @@ function finishRoad() {
 }
 
 function clearRoad() {
-  road = { pts: [], width: road.width };
+  road = { pts: [], width: road.width, type: 'spine' }; branches = [];
   drawingRoad = false;
   updateStats(); refreshRoadUI(); render();
   if (view === '3d') build3d();
@@ -498,6 +580,28 @@ function drawRoad2d() {
     ctx.stroke();
     ctx.setLineDash([]);
   }
+  // Branches: each at its own type width, with the 2.0m footways STP-01(2)(b)
+  // requires alongside all streets drawn as thin edge lines.
+  branches.forEach(br => {
+    if (!br.pts || br.pts.length < 2) return;
+    const ty = ROAD_TYPES[br.type] || ROAD_TYPES.lane;
+    ctx.beginPath();
+    const p0 = w2s(br.pts[0].x, br.pts[0].y);
+    ctx.moveTo(p0.x, p0.y);
+    for (let i = 1; i < br.pts.length; i++) { const s = w2s(br.pts[i].x, br.pts[i].y); ctx.lineTo(s.x, s.y); }
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.strokeStyle = ty.color;
+    ctx.lineWidth = Math.max(2, ty.width * SCALE * zoom);
+    ctx.stroke();
+    if (ty.footway > 0) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.16)';
+      ctx.lineWidth = Math.max(1, (ty.width + 2 * ty.footway) * SCALE * zoom);
+      ctx.globalCompositeOperation = 'destination-over';
+      ctx.stroke();
+      ctx.globalCompositeOperation = 'source-over';
+    }
+  });
+
   // vertex handles while editing
   if (drawingRoad) {
     [stub, ...road.pts].forEach((p, i) => {
@@ -898,18 +1002,13 @@ function distToBoundary(px, py) {
   return best;
 }
 
-// Shortest distance from (px,py) to the road centreline (Infinity if no road).
+// Shortest distance from (px,py) to ANY street centreline (Infinity if none).
 function distToRoadCentre(px, py) {
-  const c = roadCenterline();
-  if (c.length < 2) return Infinity;
+  const rs = allRoads();
+  if (!rs.length) return Infinity;
   let best = Infinity;
-  for (let i = 1; i < c.length; i++) {
-    const a = c[i - 1], b = c[i];
-    const dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy;
-    let t = len2 > 0 ? ((px - a.x) * dx + (py - a.y) * dy) / len2 : 0;
-    t = Math.max(0, Math.min(1, t));
-    const fx = a.x + t * dx, fy = a.y + t * dy;
-    const d = Math.hypot(px - fx, py - fy);
+  for (const r of rs) {
+    const d = distToCenterline(px, py, r.pts);
     if (d < best) best = d;
   }
   return best;
@@ -931,15 +1030,15 @@ function footprintCorners(cx, cy, hw, hd, t, n) {
 // carriageway. Buffers are x-bands (east = +x, west = -x).
 function footprintValid(cx, cy, hw, hd, t, n) {
   const b = boundaryBounds();
-  const roadClear = road.width / 2 + 0.5; // keep the whole footprint off the carriageway
   if (inAnySuds(cx, cy)) return false;    // don't build on attenuation SuDS areas
   for (const c of footprintCorners(cx, cy, hw, hd, t, n)) {
     if (!pointInBoundary(c.x, c.y)) return false;
     if (distToBoundary(c.x, c.y) < genParams.boundaryInset) return false;
     if (c.x > b.xMax - genParams.bufferE) return false; // eastern heritage buffer
     if (c.x < b.xMin + genParams.bufferW) return false; // western Cuckoo Trail buffer
+    if (onAnyCarriageway(c.x, c.y, 0.5)) return false;  // no corner over any street
   }
-  if (distToRoadCentre(cx, cy) < roadClear) return false;
+  if (onAnyCarriageway(cx, cy, 0.5)) return false;
   return true;
 }
 
@@ -1104,9 +1203,13 @@ function buildMixPattern() {
 // Place homes fronting BOTH sides of every road segment, packed along the
 // frontage at each type's width. Returns candidate dwellings (unthinned).
 function placeAlongRoad(pattern) {
-  const path = roadCenterline();
   const out = [];
   let attempt = 0;
+  // Front EVERY street in the hierarchy, not just the spine — this is what the
+  // extra frontage from secondary streets and lanes is for.
+  for (const street of allRoads()) {
+  const path = street.pts;
+  const roadW = street.width;
   for (let i = 1; i < path.length; i++) {
     const a = path[i - 1], b = path[i];
     const segLen = Math.hypot(b.x - a.x, b.y - a.y);
@@ -1123,7 +1226,7 @@ function placeAlongRoad(pattern) {
         const hw = ty.w / 2, hd = ty.d / 2;
         const along = dist + hw;
         const bx = a.x + t.x * along, by = a.y + t.y * along;
-        const off = road.width / 2 + genParams.frontSetback + hd;
+        const off = roadW / 2 + genParams.frontSetback + hd;
         const cx = bx + n.x * side * off, cy = by + n.y * side * off;
         if (footprintValid(cx, cy, hw, hd, t, n) && !overlapsPlaced(cx, cy, ty.w, ty.d) &&
             !out.some(o => Math.hypot(cx - o.cx, cy - o.cy) < (hw + o.w / 2) * 0.82)) {
@@ -1138,6 +1241,7 @@ function placeAlongRoad(pattern) {
         }
       }
     }
+  }
   }
   return out;
 }
@@ -1216,6 +1320,68 @@ function autoRoad() {
   road.pts = (Math.hypot(m.x - stub.x, m.y - stub.y) > 15 && Math.hypot(end.x - m.x, end.y - m.y) > 15)
     ? [{ x: m.x, y: m.y }, { x: end.x, y: end.y }]
     : [{ x: end.x, y: end.y }];
+  autoBranches();
+}
+
+// Hang shared-surface lanes off the spine. A single spine limits a scheme to the
+// frontage of one street, which is why the generator plateaus well below the
+// target on a deep site; branches add the frontage that lets it get there, and
+// give the layout the street hierarchy Policy HaHD 6(2) asks for.
+// Sides alternate so the layout does not comb to one side.
+function autoBranches() {
+  branches = [];
+  const spine = roadCenterline();
+  if (spine.length < 2) return;
+  const b = boundaryBounds();
+  const laneW = ROAD_TYPES.lane.width;
+  const clear = Math.max(10, laneW + genParams.frontSetback);
+  const ok = (x, y) =>
+    pointInBoundary(x, y) && distToBoundary(x, y) > clear && !inAnySuds(x, y) &&
+    x < b.xMax - genParams.bufferE && x > b.xMin + genParams.bufferW;
+
+  // Measure the whole spine first, so stations are spaced along the entire
+  // street rather than reset at every vertex — a spine made of several short
+  // segments would otherwise get no branches at all.
+  const segs = [];
+  let total = 0;
+  for (let i = 1; i < spine.length; i++) {
+    const a = spine[i - 1], c = spine[i];
+    const L = Math.hypot(c.x - a.x, c.y - a.y);
+    if (L > 0) { segs.push({ a, L, t: { x: (c.x - a.x) / L, y: (c.y - a.y) / L } }); total += L; }
+  }
+  if (total < 60) return;
+
+  // How far a lane can run from a junction before it leaves developable land.
+  const reach = (j, n, sgn, MAX, STEP) => {
+    let len = 0;
+    while (len + STEP <= MAX && ok(j.x + n.x * sgn * (len + STEP), j.y + n.y * sgn * (len + STEP))) len += STEP;
+    return len;
+  };
+
+  let id = 1, prefer = 1;
+  const SPACING = 45, MIN_LEN = 22, MAX_LEN = 70, STEP = 5, ENDS = 25;
+  for (let s = SPACING; s <= total - ENDS; s += SPACING) {
+    let acc = 0, seg = null, into = 0;
+    for (const sg of segs) {
+      if (acc + sg.L >= s) { seg = sg; into = s - acc; break; }
+      acc += sg.L;
+    }
+    if (!seg) continue;
+    const j = { x: seg.a.x + seg.t.x * into, y: seg.a.y + seg.t.y * into };
+    const n = { x: -seg.t.y, y: seg.t.x };
+    // Try the preferred side first, then the other. Alternating keeps the layout
+    // balanced, but a short side should not cost us the branch entirely.
+    const first  = reach(j, n,  prefer, MAX_LEN, STEP);
+    const second = reach(j, n, -prefer, MAX_LEN, STEP);
+    const sgn = (first >= second) ? prefer : -prefer;
+    const len = Math.max(first, second);
+    if (len >= MIN_LEN) {
+      branches.push({ id: id++, type: 'lane',
+                      pts: [{ x: j.x, y: j.y },
+                            { x: j.x + n.x * sgn * len, y: j.y + n.y * sgn * len }] });
+      prefer = -sgn; // next branch favours the opposite side
+    }
+  }
 }
 
 // MAIN ENTRY — build the scheme from the current boundary/access/road.
@@ -1227,7 +1393,15 @@ function generateScheme() {
   const candidates = roadCenterline().length >= 2 ? placeAlongRoad(pattern) : placeGrid(pattern);
   dwellings = thinToTarget(candidates, genParams.targetCount);
   assignAppearance(dwellings);
-  buildPlots(); // subdivide into plots + private gardens once the homes are final
+  // Subdivide into plots, then DROP any home that cannot hold one: a dwelling
+  // with no curtilage is not a real dwelling, and leaving it on the plan
+  // overstates capacity. The second pass lets the survivors spread into the
+  // space the dropped homes were holding, so gardens end up deeper.
+  buildPlots();
+  const beforePlots = dwellings.length;
+  dwellings = dwellings.filter(d => d.plot);
+  const droppedNoPlot = beforePlots - dwellings.length;
+  if (droppedNoPlot) buildPlots();
   placedDwellings = dwellings.length;
 
   const lbl = document.getElementById('dwellingCountLabel');
@@ -1236,7 +1410,8 @@ function generateScheme() {
   render();
   if (view === '3d') build3d();
   const hasRoad = roadCenterline().length >= 2;
-  showToast(`Generated ${dwellings.length} homes` + (hasRoad ? ' fronting the road' : ' (draw a road for frontages)'));
+  showToast(`Generated ${dwellings.length} homes` + (hasRoad ? ' fronting the streets' : ' (draw a road for frontages)')
+            + (droppedNoPlot ? ` — ${droppedNoPlot} dropped (no room for a plot)` : ''));
 }
 
 function clearScheme() {
@@ -2104,7 +2279,7 @@ canvas.addEventListener('dblclick', e => {
     siteClosed = true;
     setDefaultAccessPoint();
     setDefaultUtilities();
-    road = { pts: [], width: road.width }; drawingRoad = false; // new boundary → clear road
+    road = { pts: [], width: road.width, type: 'spine' }; branches = []; drawingRoad = false; // new boundary → clear road
     dwellings = []; placedDwellings = 0;                        // new boundary → clear scheme
     suds = []; sudsDraft = []; drawingSuds = false;             // new boundary → clear SuDS
     setTool('site');
@@ -2882,7 +3057,7 @@ function clearAll() {
   suds = []; sudsDraft = []; drawingSuds = false;
   accessPt = null; movingEntrance = false;
   utilities = { sewer: null, water: null, elec: null }; movingUtility = null;
-  road = { pts: [], width: road.width }; drawingRoad = false;
+  road = { pts: [], width: road.width, type: 'spine' }; branches = []; drawingRoad = false;
   updateStats(); render(); updateProps(); setTool('site');
 }
 
@@ -2916,7 +3091,7 @@ function saveEditorProject() {
     created:     new Date().toISOString(),
     type:        'editor',
     stats:       { gfa, buildings: buildings.length, siteArea: sA, floors: buildings.length ? Math.max(...buildings.map(b => b.floors)) : 0 },
-    editorState: { sitePts, siteClosed, buildings, defW, defD, defF, accessPt, accessSplay, road, utilities, deductPct, dwellings, genParams, suds, renderStyle }
+    editorState: { sitePts, siteClosed, buildings, defW, defD, defF, accessPt, accessSplay, road, branches, utilities, deductPct, dwellings, genParams, suds, renderStyle }
   });
   showToast('Project saved!');
 }
@@ -3337,7 +3512,7 @@ function loadDXF(input) {
 
       setDefaultAccessPoint(); // entrance defaults to the new southern tip
       setDefaultUtilities();   // utilities reset to surveyed defaults on re-import
-      road = { pts: [], width: road.width }; drawingRoad = false; // new boundary → clear road
+      road = { pts: [], width: road.width, type: 'spine' }; branches = []; drawingRoad = false; // new boundary → clear road
       dwellings = []; placedDwellings = 0;                        // new boundary → clear scheme
       suds = []; sudsDraft = []; drawingSuds = false;             // new boundary → clear SuDS
       fitViewToBoundary(sitePts);
@@ -3378,7 +3553,7 @@ function clearDXFBoundary() {
   suds = []; sudsDraft = []; drawingSuds = false;
   accessPt = null; movingEntrance = false;
   utilities = { sewer: null, water: null, elec: null }; movingUtility = null;
-  road = { pts: [], width: road.width }; drawingRoad = false;
+  road = { pts: [], width: road.width, type: 'spine' }; branches = []; drawingRoad = false;
   dxfOrigin = null;
   document.getElementById('dxfStatus').textContent  = 'No boundary loaded';
   document.getElementById('dxfStatus').className    = 'pdf-status';
@@ -3415,7 +3590,9 @@ if (new URLSearchParams(window.location.search).get('load')) {
     document.getElementById('splayWidLabel').textContent = (accessSplay.halfWidth * 2) + 'm';
     utilities = saved.utilities || { sewer: null, water: null, elec: null };
     if (!saved.utilities && siteClosed && sitePts.length >= 3) setDefaultUtilities();
-    road = saved.road || { pts: [], width: 5 };
+    road = saved.road || { pts: [], width: 5, type: 'spine' };
+    if (!road.type) road.type = 'spine';
+    branches = saved.branches || [];
     document.getElementById('roadWidthSlider').value      = road.width;
     document.getElementById('roadWidthLabel').textContent = road.width + 'm';
     deductPct = (typeof saved.deductPct === 'number') ? saved.deductPct : 25;
