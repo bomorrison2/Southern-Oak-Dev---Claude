@@ -150,6 +150,15 @@ const ROAD_TYPES = {
 // where pts[0] is the junction point ON the spine. The spine itself stays in
 // `road` so existing saved projects keep loading unchanged.
 let branches = [];
+// Walking / wheeling / cycling links. NOT carriageways: they carry no vehicles,
+// so they are drawn and measured separately and never used to front homes.
+// Policy HaHD 6(3)(a) permits cul-de-sac layouts only where they are "well
+// connected ... by direct walking, wheeling and cycling routes and where the use
+// of filtered permeability restricts through movement by motorised vehicles".
+// On a site too narrow for a vehicular loop, this link IS the connectivity
+// answer - and it doubles as the new Cuckoo Trail access Policy HaM 2 seeks.
+let links = [];
+const LINK_WIDTH = 3.0; // m, indicative shared walking/cycling width
 
 // Every street in the scheme as { pts, width, type, footway }, spine first.
 function allRoads() {
@@ -192,6 +201,15 @@ function onAnyCarriageway(px, py, margin) {
   }
   return false;
 }
+
+function linkLengthM() {
+  return links.reduce((s, l) => {
+    let L = 0;
+    for (let i = 1; i < l.pts.length; i++) L += Math.hypot(l.pts[i].x - l.pts[i-1].x, l.pts[i].y - l.pts[i-1].y);
+    return s + L;
+  }, 0);
+}
+function linkAreaM2() { return linkLengthM() * LINK_WIDTH; }
 
 function streetLengths() {
   const by = {};
@@ -524,7 +542,7 @@ function finishRoad() {
 }
 
 function clearRoad() {
-  road = { pts: [], width: road.width, type: 'spine' }; branches = [];
+  road = { pts: [], width: road.width, type: 'spine' }; branches = []; links = [];
   drawingRoad = false;
   updateStats(); refreshRoadUI(); render();
   if (view === '3d') build3d();
@@ -600,6 +618,20 @@ function drawRoad2d() {
       ctx.stroke();
       ctx.globalCompositeOperation = 'source-over';
     }
+  });
+
+  // Walking / cycling links: dashed green, clearly not a carriageway.
+  links.forEach(l => {
+    if (!l.pts || l.pts.length < 2) return;
+    ctx.beginPath();
+    const q0 = w2s(l.pts[0].x, l.pts[0].y);
+    ctx.moveTo(q0.x, q0.y);
+    for (let i = 1; i < l.pts.length; i++) { const s2 = w2s(l.pts[i].x, l.pts[i].y); ctx.lineTo(s2.x, s2.y); }
+    ctx.strokeStyle = "#00e87a";
+    ctx.lineWidth = Math.max(1.5, LINK_WIDTH * SCALE * zoom * 0.6);
+    ctx.setLineDash([7, 5]);
+    ctx.stroke();
+    ctx.setLineDash([]);
   });
 
   // vertex handles while editing
@@ -1299,92 +1331,185 @@ function thinToTarget(list, target) {
 // Auto-lay a sensible estate road: a spine from the access stub to the deepest
 // interior point, with one gentle bend, so a generated scheme always reads as a
 // street rather than a grid. Only runs when no road has been drawn.
+/* ── STREET LAYOUT GENERATION ─────────────────────────────── */
+// The layout is derived from the shape of the DEVELOPABLE land, not from a
+// straight line between the access and the far corner. A residential street
+// only works if the land either side of it is deep enough to hold a plot, so
+// the generator measures the site across its short axis and lays streets where
+// that depth actually exists.
+
+// Every developable point: inside the boundary and its inset, outside both
+// buffers, off the SuDS. `step` trades accuracy for speed.
+function developableSamples(step) {
+  const st = step || 3;
+  const b = boundaryBounds();
+  const out = [];
+  for (let x = b.xMin; x <= b.xMax; x += st)
+    for (let y = b.yMin; y <= b.yMax; y += st) {
+      if (!pointInBoundary(x, y)) continue;
+      if (distToBoundary(x, y) < genParams.boundaryInset) continue;
+      if (x > b.xMax - genParams.bufferE) continue;
+      if (x < b.xMin + genParams.bufferW) continue;
+      if (inAnySuds(x, y)) continue;
+      out.push({ x, y });
+    }
+  return out;
+}
+
+// Principal axis of a point set: u runs along its length, v across it.
+function siteAxis(pts) {
+  const n = pts.length;
+  const mx = pts.reduce((s, p) => s + p.x, 0) / n;
+  const my = pts.reduce((s, p) => s + p.y, 0) / n;
+  let sxx = 0, syy = 0, sxy = 0;
+  pts.forEach(p => { const dx = p.x - mx, dy = p.y - my; sxx += dx * dx; syy += dy * dy; sxy += dx * dy; });
+  const th = 0.5 * Math.atan2(2 * sxy / n, (sxx - syy) / n);
+  return { mx, my, u: { x: Math.cos(th), y: Math.sin(th) }, v: { x: -Math.sin(th), y: Math.cos(th) } };
+}
+
+// Depth of land one side of a street needs in order to hold a plot: footway,
+// front garden, house and rear garden. `rear` lets us test a reduced-garden case.
+function sideDepth(rear) {
+  const houseD = 9; // representative type depth (semi / terrace)
+  return ROAD_TYPES.spine.footway + genParams.frontSetback + houseD +
+         (rear === undefined ? genParams.rearGarden : rear);
+}
+// Land consumed by one double-sided street at full garden depth.
+function corridorWidth() { return ROAD_TYPES.spine.width + 2 * sideDepth(); }
+
+// Walk the developable area along its long axis and, for each station, return
+// the centre and width of the usable band there. The band is the LONGEST
+// CONTIGUOUS run across the section, so a re-entrant notch in the boundary
+// cannot drag the street into land that is not actually there.
+function sectionProfile(samples, ax, station) {
+  const BIN = 3;
+  const proj = samples.map(p => {
+    const dx = p.x - ax.mx, dy = p.y - ax.my;
+    return { a: dx * ax.u.x + dy * ax.u.y, c: dx * ax.v.x + dy * ax.v.y };
+  });
+  let aMin = Infinity, aMax = -Infinity;
+  proj.forEach(p => { if (p.a < aMin) aMin = p.a; if (p.a > aMax) aMax = p.a; });
+  const out = [];
+  for (let a = aMin; a <= aMax; a += station) {
+    const slice = proj.filter(p => p.a >= a && p.a < a + station);
+    if (slice.length < 3) continue;
+    let cLo = Infinity, cHi = -Infinity;
+    slice.forEach(p => { if (p.c < cLo) cLo = p.c; if (p.c > cHi) cHi = p.c; });
+    const bins = new Array(Math.max(1, Math.ceil((cHi - cLo) / BIN))).fill(false);
+    slice.forEach(p => { bins[Math.min(bins.length - 1, Math.floor((p.c - cLo) / BIN))] = true; });
+    let bestS = 0, bestL = 0, curS = -1, curL = 0;
+    bins.forEach((occ, i) => {
+      if (occ) { if (curS < 0) curS = i; curL++; if (curL > bestL) { bestL = curL; bestS = curS; } }
+      else { curS = -1; curL = 0; }
+    });
+    if (!bestL) continue;
+    const lo = cLo + bestS * BIN, hi = cLo + (bestS + bestL) * BIN;
+    out.push({ a: a + station / 2, c: (lo + hi) / 2, width: hi - lo });
+  }
+  return out;
+}
+
+function toWorld(ax, a, c) {
+  return { x: ax.mx + ax.u.x * a + ax.v.x * c, y: ax.my + ax.u.y * a + ax.v.y * c };
+}
+
+// Drop points that sit almost on the line between their neighbours, so a street
+// reads as designed rather than as a traced contour.
+function simplifyPath(pts, tol) {
+  if (pts.length < 3) return pts;
+  const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const a = out[out.length - 1], b = pts[i], c = pts[i + 1];
+    const abx = b.x - a.x, aby = b.y - a.y, acx = c.x - a.x, acy = c.y - a.y;
+    const len = Math.hypot(acx, acy) || 1;
+    const dev = Math.abs(abx * acy - aby * acx) / len; // perpendicular offset
+    if (dev > tol) out.push(b);
+  }
+  out.push(pts[pts.length - 1]);
+  return out;
+}
+
+// Build the street network: a primary street following the developable land,
+// plus a parallel street closing a LOOP wherever the site is wide enough for
+// two corridors. Loops are preferred to dead ends because Policy HaHD 6(3)(a)
+// requires cul-de-sac layouts to be avoided unless they are well connected by
+// direct walking, wheeling and cycling routes.
 function autoRoad() {
   if (!siteClosed || sitePts.length < 3 || !accessPt) return;
   const stub = roadStubPoint();
   if (!stub) return;
-  const b = boundaryBounds();
-  const clear = Math.max(12, road.width);
-  const cand = [];
-  for (let x = b.xMin; x <= b.xMax; x += 5)
-    for (let y = b.yMin; y <= b.yMax; y += 5)
-      if (pointInBoundary(x, y) && distToBoundary(x, y) > clear && !inAnySuds(x, y)) cand.push({ x, y });
-  if (!cand.length) { road.pts = []; return; }
-  // spine end = deepest-interior point farthest from the stub
-  let end = cand[0], best = -1;
-  for (const p of cand) { const d = Math.hypot(p.x - stub.x, p.y - stub.y); if (d > best) { best = d; end = p; } }
-  // bend point = interior point nearest the stub→end midpoint
-  const mid = { x: (stub.x + end.x) / 2, y: (stub.y + end.y) / 2 };
-  let m = end, md = Infinity;
-  for (const p of cand) { const d = Math.hypot(p.x - mid.x, p.y - mid.y); if (d < md) { md = d; m = p; } }
-  road.pts = (Math.hypot(m.x - stub.x, m.y - stub.y) > 15 && Math.hypot(end.x - m.x, end.y - m.y) > 15)
-    ? [{ x: m.x, y: m.y }, { x: end.x, y: end.y }]
-    : [{ x: end.x, y: end.y }];
-  autoBranches();
-}
-
-// Hang shared-surface lanes off the spine. A single spine limits a scheme to the
-// frontage of one street, which is why the generator plateaus well below the
-// target on a deep site; branches add the frontage that lets it get there, and
-// give the layout the street hierarchy Policy HaHD 6(2) asks for.
-// Sides alternate so the layout does not comb to one side.
-function autoBranches() {
   branches = [];
-  const spine = roadCenterline();
-  if (spine.length < 2) return;
-  const b = boundaryBounds();
-  const laneW = ROAD_TYPES.lane.width;
-  const clear = Math.max(10, laneW + genParams.frontSetback);
-  const ok = (x, y) =>
-    pointInBoundary(x, y) && distToBoundary(x, y) > clear && !inAnySuds(x, y) &&
-    x < b.xMax - genParams.bufferE && x > b.xMin + genParams.bufferW;
+  const samples = developableSamples(3);
+  if (samples.length < 20) { road.pts = []; return; }
 
-  // Measure the whole spine first, so stations are spaced along the entire
-  // street rather than reset at every vertex — a spine made of several short
-  // segments would otherwise get no branches at all.
-  const segs = [];
-  let total = 0;
-  for (let i = 1; i < spine.length; i++) {
-    const a = spine[i - 1], c = spine[i];
-    const L = Math.hypot(c.x - a.x, c.y - a.y);
-    if (L > 0) { segs.push({ a, L, t: { x: (c.x - a.x) / L, y: (c.y - a.y) / L } }); total += L; }
-  }
-  if (total < 60) return;
+  const ax = siteAxis(samples);
+  const STATION = 12;
+  const prof = sectionProfile(samples, ax, STATION);
+  if (prof.length < 2) { road.pts = []; return; }
 
-  // How far a lane can run from a junction before it leaves developable land.
-  const reach = (j, n, sgn, MAX, STEP) => {
-    let len = 0;
-    while (len + STEP <= MAX && ok(j.x + n.x * sgn * (len + STEP), j.y + n.y * sgn * (len + STEP))) len += STEP;
-    return len;
-  };
+  // A street is only worth laying where at least one side can hold a plot.
+  const MIN_REAR = 4;
+  const oneSide = ROAD_TYPES.spine.width + sideDepth(MIN_REAR);
+  const usable = prof.filter(p => p.width >= oneSide);
+  if (usable.length < 2) { road.pts = []; return; }
 
-  let id = 1, prefer = 1;
-  const SPACING = 45, MIN_LEN = 22, MAX_LEN = 70, STEP = 5, ENDS = 25;
-  for (let s = SPACING; s <= total - ENDS; s += SPACING) {
-    let acc = 0, seg = null, into = 0;
-    for (const sg of segs) {
-      if (acc + sg.L >= s) { seg = sg; into = s - acc; break; }
-      acc += sg.L;
+  // Primary street down the middle of the usable band.
+  let spine = simplifyPath(usable.map(p => toWorld(ax, p.a, p.c)), 4);
+
+  // Run it away from the access, not back past it.
+  const dFirst = Math.hypot(spine[0].x - stub.x, spine[0].y - stub.y);
+  const dLast  = Math.hypot(spine[spine.length - 1].x - stub.x, spine[spine.length - 1].y - stub.y);
+  if (dLast < dFirst) spine.reverse();
+  while (spine.length > 2 &&
+         Math.hypot(spine[0].x - stub.x, spine[0].y - stub.y) >
+         Math.hypot(spine[1].x - stub.x, spine[1].y - stub.y)) spine.shift();
+  road.pts = spine;
+  road.type = 'spine';
+
+  // Where the site is wide enough for two corridors, run a parallel street and
+  // tie both ends back to the spine so the pair forms a loop, not a spur.
+  const corridor = corridorWidth();
+  const loopNeed = corridor + sideDepth(MIN_REAR);
+  // Filtered permeability: run a walking/cycling link from the far end of the
+  // street out to the western boundary, where the Cuckoo Trail runs. This is
+  // what makes a single-street layout acceptable under HaHD 6(3)(a), and it is
+  // the new inclusive Trail access HaM 2 asks development to deliver.
+  links = [];
+  const tip = road.pts[road.pts.length - 1];
+  if (tip) {
+    const bb = boundaryBounds();
+    let target = null, bestD = Infinity;
+    for (let y = bb.yMin; y <= bb.yMax; y += 3) {
+      const x = bb.xMin + genParams.bufferW * 0.5; // into the Trail buffer, not across it
+      if (!pointInBoundary(x, y)) continue;
+      const d = Math.hypot(x - tip.x, y - tip.y);
+      if (d < bestD) { bestD = d; target = { x, y }; }
     }
-    if (!seg) continue;
-    const j = { x: seg.a.x + seg.t.x * into, y: seg.a.y + seg.t.y * into };
-    const n = { x: -seg.t.y, y: seg.t.x };
-    // Try the preferred side first, then the other. Alternating keeps the layout
-    // balanced, but a short side should not cost us the branch entirely.
-    const first  = reach(j, n,  prefer, MAX_LEN, STEP);
-    const second = reach(j, n, -prefer, MAX_LEN, STEP);
-    const sgn = (first >= second) ? prefer : -prefer;
-    const len = Math.max(first, second);
-    if (len >= MIN_LEN) {
-      branches.push({ id: id++, type: 'lane',
-                      pts: [{ x: j.x, y: j.y },
-                            { x: j.x + n.x * sgn * len, y: j.y + n.y * sgn * len }] });
-      prefer = -sgn; // next branch favours the opposite side
+    if (target && bestD > 8) links.push({ id: 1, pts: [{ x: tip.x, y: tip.y }, target] });
+  }
+
+  const wide = usable.filter(p => p.width >= loopNeed);
+  if (wide.length >= 2 && Math.abs(wide[wide.length - 1].a - wide[0].a) >= 30) {
+    const off = corridor / 2;
+    const fits = o => wide.every(p => {
+      const w = toWorld(ax, p.a, p.c + o);
+      return pointInBoundary(w.x, w.y) && distToBoundary(w.x, w.y) > genParams.boundaryInset;
+    });
+    const side = fits(off) ? off : (fits(-off) ? -off : 0);
+    if (side !== 0) {
+      const loop = simplifyPath(wide.map(p => toWorld(ax, p.a, p.c + side)), 4);
+      if (loop.length >= 2) {
+        branches.push({ id: 1, type: 'secondary', pts: loop });
+        branches.push({ id: 2, type: 'lane',
+                        pts: [toWorld(ax, wide[0].a, wide[0].c), loop[0]] });
+        branches.push({ id: 3, type: 'lane',
+                        pts: [toWorld(ax, wide[wide.length - 1].a, wide[wide.length - 1].c),
+                              loop[loop.length - 1]] });
+      }
     }
   }
 }
 
-// MAIN ENTRY — build the scheme from the current boundary/access/road.
 function generateScheme() {
   if (!siteClosed || sitePts.length < 3) { showToast('Close a site boundary first'); return; }
   const pattern = buildMixPattern();
@@ -2279,7 +2404,7 @@ canvas.addEventListener('dblclick', e => {
     siteClosed = true;
     setDefaultAccessPoint();
     setDefaultUtilities();
-    road = { pts: [], width: road.width, type: 'spine' }; branches = []; drawingRoad = false; // new boundary → clear road
+    road = { pts: [], width: road.width, type: 'spine' }; branches = []; links = []; drawingRoad = false; // new boundary → clear road
     dwellings = []; placedDwellings = 0;                        // new boundary → clear scheme
     suds = []; sudsDraft = []; drawingSuds = false;             // new boundary → clear SuDS
     setTool('site');
@@ -3057,7 +3182,7 @@ function clearAll() {
   suds = []; sudsDraft = []; drawingSuds = false;
   accessPt = null; movingEntrance = false;
   utilities = { sewer: null, water: null, elec: null }; movingUtility = null;
-  road = { pts: [], width: road.width, type: 'spine' }; branches = []; drawingRoad = false;
+  road = { pts: [], width: road.width, type: 'spine' }; branches = []; links = []; drawingRoad = false;
   updateStats(); render(); updateProps(); setTool('site');
 }
 
@@ -3091,7 +3216,7 @@ function saveEditorProject() {
     created:     new Date().toISOString(),
     type:        'editor',
     stats:       { gfa, buildings: buildings.length, siteArea: sA, floors: buildings.length ? Math.max(...buildings.map(b => b.floors)) : 0 },
-    editorState: { sitePts, siteClosed, buildings, defW, defD, defF, accessPt, accessSplay, road, branches, utilities, deductPct, dwellings, genParams, suds, renderStyle }
+    editorState: { sitePts, siteClosed, buildings, defW, defD, defF, accessPt, accessSplay, road, branches, links, utilities, deductPct, dwellings, genParams, suds, renderStyle }
   });
   showToast('Project saved!');
 }
@@ -3512,7 +3637,7 @@ function loadDXF(input) {
 
       setDefaultAccessPoint(); // entrance defaults to the new southern tip
       setDefaultUtilities();   // utilities reset to surveyed defaults on re-import
-      road = { pts: [], width: road.width, type: 'spine' }; branches = []; drawingRoad = false; // new boundary → clear road
+      road = { pts: [], width: road.width, type: 'spine' }; branches = []; links = []; drawingRoad = false; // new boundary → clear road
       dwellings = []; placedDwellings = 0;                        // new boundary → clear scheme
       suds = []; sudsDraft = []; drawingSuds = false;             // new boundary → clear SuDS
       fitViewToBoundary(sitePts);
@@ -3553,7 +3678,7 @@ function clearDXFBoundary() {
   suds = []; sudsDraft = []; drawingSuds = false;
   accessPt = null; movingEntrance = false;
   utilities = { sewer: null, water: null, elec: null }; movingUtility = null;
-  road = { pts: [], width: road.width, type: 'spine' }; branches = []; drawingRoad = false;
+  road = { pts: [], width: road.width, type: 'spine' }; branches = []; links = []; drawingRoad = false;
   dxfOrigin = null;
   document.getElementById('dxfStatus').textContent  = 'No boundary loaded';
   document.getElementById('dxfStatus').className    = 'pdf-status';
@@ -3593,6 +3718,7 @@ if (new URLSearchParams(window.location.search).get('load')) {
     road = saved.road || { pts: [], width: 5, type: 'spine' };
     if (!road.type) road.type = 'spine';
     branches = saved.branches || [];
+    links = saved.links || [];
     document.getElementById('roadWidthSlider').value      = road.width;
     document.getElementById('roadWidthLabel').textContent = road.width + 'm';
     deductPct = (typeof saved.deductPct === 'number') ? saved.deductPct : 25;
