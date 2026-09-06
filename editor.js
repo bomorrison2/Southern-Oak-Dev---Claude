@@ -160,6 +160,123 @@ let branches = [];
 let links = [];
 const LINK_WIDTH = 3.0; // m, indicative shared walking/cycling width
 
+/* ── JUNCTION VISIBILITY SPLAYS ───────────────────────────── */
+// A junction needs a clear sight triangle: back `x` metres from the give-way
+// line along the minor arm, then `y` metres along the major arm in each
+// direction. Guideline STP-01(2)(a) sets residential streets at a 20mph
+// maximum, for which Manual for Streets gives roughly 25m stopping sight
+// distance. Sayerland Lane is not a 20mph residential street, so the site
+// access uses a longer default.
+//
+// These are INDICATIVE working figures so the layout can be tested against
+// something real. Splay dimensions at the site access are a matter for East
+// Sussex County Council as highway authority and must be agreed with them —
+// nothing here is an approved splay. UNVERIFIED against ESCC standards.
+let splayParams = { x: 2.4, yInternal: 25, yAccess: 43 };
+
+function unitVec(dx, dy) { const L = Math.hypot(dx, dy) || 1; return { x: dx / L, y: dy / L }; }
+
+// Tangent of a polyline at the point nearest p.
+function tangentAt(pts, p) {
+  let best = null, bestD = Infinity;
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i];
+    const dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy;
+    let t = len2 > 0 ? ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    const d = Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+    if (d < bestD) { bestD = d; best = unitVec(dx, dy); }
+  }
+  return best;
+}
+
+// The sight triangle at one junction. J sits on the major-arm centreline, d
+// points up the minor arm, m runs along the major arm, mw is the major arm's
+// half width. P1, E and P2 are collinear on the nearside channel, so the union
+// of the two standard triangles is the single triangle G-P1-P2.
+function splayTriangle(J, d, m, mw, y, kind) {
+  const E  = { x: J.x + d.x * mw, y: J.y + d.y * mw };
+  const G  = { x: J.x + d.x * (mw + splayParams.x), y: J.y + d.y * (mw + splayParams.x) };
+  const P1 = { x: E.x + m.x * y, y: E.y + m.y * y };
+  const P2 = { x: E.x - m.x * y, y: E.y - m.y * y };
+  return { kind, pts: [G, P1, P2] };
+}
+
+// Every junction in the scheme: the site access onto the public highway, plus
+// each internal street or link meeting the primary street.
+function junctionSplays() {
+  const out = [];
+  if (accessPt && siteClosed && sitePts.length >= 3) {
+    const e = boundaryEdgeAt(accessPt);
+    if (e) out.push(splayTriangle(accessPt, { x: e.nx, y: e.ny }, { x: e.dhx, y: e.dhy },
+                                  0, splayParams.yAccess, 'access'));
+  }
+  const spine = roadCenterline();
+  if (spine.length >= 2) {
+    branches.concat(links).forEach(b => {
+      if (!b.pts || b.pts.length < 2) return;
+      const J = b.pts[0];
+      if (distToCenterline(J.x, J.y, spine) > road.width) return; // not on the spine
+      const m = tangentAt(spine, J);
+      if (!m) return;
+      const d = unitVec(b.pts[1].x - J.x, b.pts[1].y - J.y);
+      out.push(splayTriangle(J, d, m, road.width / 2, splayParams.yInternal, 'internal'));
+    });
+  }
+  return out;
+}
+
+function pointInTriangle(p, t) {
+  const a = t[0], b = t[1], c = t[2];
+  const s1 = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+  const s2 = (c.x - b.x) * (p.y - b.y) - (c.y - b.y) * (p.x - b.x);
+  const s3 = (a.x - c.x) * (p.y - c.y) - (a.y - c.y) * (p.x - c.x);
+  const neg = (s1 < 0) || (s2 < 0) || (s3 < 0);
+  const pos = (s1 > 0) || (s2 > 0) || (s3 > 0);
+  return !(neg && pos);
+}
+
+// Cached per generation run: junctionSplays() walks every street and the
+// placement loop asks this thousands of times.
+let _splayCache = null;
+function activeSplays() {
+  if (!_splayCache) _splayCache = junctionSplays();
+  return _splayCache;
+}
+function invalidateSplays() { _splayCache = null; }
+
+// Buildings must not stand in a sight triangle. Gardens may — planting there
+// simply has to be kept low — so this is tested against footprints, not plots.
+function inAnySplay(px, py) {
+  const ss = activeSplays();
+  for (let i = 0; i < ss.length; i++) if (pointInTriangle({ x: px, y: py }, ss[i].pts)) return true;
+  return false;
+}
+
+// 2D: sight triangles, amber like the entrance marker they serve.
+function drawSplays2d() {
+  const ss = junctionSplays();
+  if (!ss.length) return;
+  ctx.save();
+  ss.forEach(s => {
+    const p = s.pts.map(q => w2s(q.x, q.y));
+    ctx.beginPath();
+    ctx.moveTo(p[0].x, p[0].y);
+    ctx.lineTo(p[1].x, p[1].y);
+    ctx.lineTo(p[2].x, p[2].y);
+    ctx.closePath();
+    ctx.fillStyle   = 'rgba(255,140,0,0.10)';
+    ctx.strokeStyle = 'rgba(255,174,77,0.55)';
+    ctx.lineWidth   = 1;
+    ctx.setLineDash([5, 4]);
+    ctx.fill();
+    ctx.stroke();
+    ctx.setLineDash([]);
+  });
+  ctx.restore();
+}
+
+
 // Every street in the scheme as { pts, width, type, footway }, spine first.
 function allRoads() {
   const out = [];
@@ -671,10 +788,26 @@ function ribbonMesh(pos, mat, recv) {
 }
 
 // 3D estate street: kerbs + footways + carriageway (+ dashed centre line).
+// Build every street in the hierarchy in 3D, then the walking/cycling links.
 function addRoad3d(scene, cx, cz) {
-  const c = roadCenterline();
-  if (c.length < 2) return;
-  const hw = road.width / 2;
+  allRoads().forEach(r => addStreet3d(scene, cx, cz, r.pts, r.width, r.footway));
+  addLinks3d(scene, cx, cz);
+}
+
+// Footpaths read as a pale surface, no kerbs or centre line - they are not
+// carriageways and should not look like one.
+function addLinks3d(scene, cx, cz) {
+  if (!links.length) return;
+  const path = styleSurface(0xb9bcae, { rough: 0.95, side: THREE.DoubleSide, pencil: 0xe8e6de });
+  links.forEach(l => {
+    if (!l.pts || l.pts.length < 2) return;
+    scene.add(ribbonMesh(ribbonPos(l.pts, -LINK_WIDTH / 2, LINK_WIDTH / 2, 0.14, cx, cz), path, true));
+  });
+}
+
+function addStreet3d(scene, cx, cz, c, width, footway) {
+  if (!c || c.length < 2) return;
+  const hw = width / 2;
   const detailed = renderStyle !== 'pencil';
   if (detailed) {
     // kerb strips + footways flank the carriageway
@@ -682,14 +815,14 @@ function addRoad3d(scene, cx, cz) {
     const foot = styleSurface(0x9a9c96, { rough: 0.95, side: THREE.DoubleSide, pencil: 0xe8e6de });
     scene.add(ribbonMesh(ribbonPos(c,  hw,        hw + 0.15,  0.20, cx, cz), kerb));
     scene.add(ribbonMesh(ribbonPos(c, -hw,       -hw - 0.15,  0.20, cx, cz), kerb));
-    scene.add(ribbonMesh(ribbonPos(c,  hw + 0.15, hw + 2.0,   0.17, cx, cz), foot, true));
-    scene.add(ribbonMesh(ribbonPos(c, -hw - 0.15,-hw - 2.0,   0.17, cx, cz), foot, true));
+    if (footway > 0) scene.add(ribbonMesh(ribbonPos(c,  hw + 0.15, hw + 0.15 + footway, 0.17, cx, cz), foot, true));
+    if (footway > 0) scene.add(ribbonMesh(ribbonPos(c, -hw - 0.15,-hw - 0.15 - footway, 0.17, cx, cz), foot, true));
   }
   // carriageway
   const tar = styleSurface(0x36393e, { rough: 0.85, side: THREE.DoubleSide, pencil: 0xd6d3ca });
   scene.add(ribbonMesh(ribbonPos(c, -hw, hw, 0.12, cx, cz), tar, true));
   // dashed white centre line (rendered/hybrid)
-  if (detailed) {
+  if (detailed && footway > 0) {
     const line = new THREE.MeshBasicMaterial({ color: 0xdedede });
     for (let i = 1; i < c.length; i++) {
       const a = c[i - 1], b = c[i];
@@ -1069,6 +1202,7 @@ function footprintValid(cx, cy, hw, hd, t, n) {
     if (c.x > b.xMax - genParams.bufferE) return false; // eastern heritage buffer
     if (c.x < b.xMin + genParams.bufferW) return false; // western Cuckoo Trail buffer
     if (onAnyCarriageway(c.x, c.y, 0.5)) return false;  // no corner over any street
+    if (inAnySplay(c.x, c.y)) return false;             // keep junction sight lines clear
   }
   if (onAnyCarriageway(cx, cy, 0.5)) return false;
   return true;
@@ -1464,6 +1598,7 @@ function autoRoad() {
          Math.hypot(spine[0].x - stub.x, spine[0].y - stub.y) >
          Math.hypot(spine[1].x - stub.x, spine[1].y - stub.y)) spine.shift();
   road.pts = spine;
+  invalidateSplays();
   road.type = 'spine';
 
   // Where the site is wide enough for two corridors, run a parallel street and
@@ -1514,6 +1649,7 @@ function generateScheme() {
   if (!siteClosed || sitePts.length < 3) { showToast('Close a site boundary first'); return; }
   const pattern = buildMixPattern();
   if (genParams.autoRoad && roadCenterline().length < 2) autoRoad(); // ensure a street exists
+  invalidateSplays(); // street network may have changed
   dwellings = []; // placeAlongRoad checks against `dwellings` via overlapsPlaced
   const candidates = roadCenterline().length >= 2 ? placeAlongRoad(pattern) : placeGrid(pattern);
   dwellings = thinToTarget(candidates, genParams.targetCount);
@@ -2550,6 +2686,7 @@ function render() {
   drawRoad2d();
 
   // Generated homes — drawn over the road so frontages read clearly
+  drawSplays2d();
   drawPlots2d();
   drawDwellings2d();
 
