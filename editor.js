@@ -1331,6 +1331,102 @@ function buildPlots() {
   });
 }
 
+
+/* ── ON-PLOT PARKING ──────────────────────────────────────── */
+// Guideline STP-02 governs residential parking. The rules encoded here:
+//   1. Quantity "must be determined in accordance with standards published by
+//      East Sussex County Council" — we do NOT hold those standards, so the
+//      counts below are INDICATIVE defaults by bedroom number and are marked
+//      UNVERIFIED. They must be checked against ESCC before any application.
+//   2(a). On-plot parking must be well integrated and big enough for a car.
+//   2(a). Driveways "must make use of porous materials that minimise surface
+//         water run-off" — porous by default here, and it matters on Weald Clay
+//         where the drainage strategy is attenuation-led.
+//   2(b). Garages "must not be located in front of the house". That bars a
+//         garage BUILDING on the frontage, not a driveway space, so bays sit in
+//         the front garden; no garages are generated.
+//   3. "Tandem parking solutions should be avoided" — bays are laid side by
+//      side across the frontage, never nose to tail.
+// A bay is 2.4 x 4.8m, the standard UK car space.
+const BAY_W = 2.4, BAY_L = 4.8;
+
+// Indicative spaces per home by bedrooms. UNVERIFIED against ESCC standards.
+function baysForBeds(beds) { return beds <= 2 ? 1 : (beds >= 4 ? 2 : 2); }
+
+// Lay bays on the plot frontage, beside the house rather than across it, in a
+// row (never tandem). Returns an array of oriented rectangles.
+function buildParking() {
+  dwellings.forEach(dw => { dw.bays = []; });
+  dwellings.forEach(dw => {
+    if (!dw.plot || dw.frontX === undefined) return;
+    const t = { x: Math.cos(dw.rot), y: Math.sin(dw.rot) };   // frontage axis
+    const f = { x: dw.frontX, y: dw.frontY };                 // toward the street
+    const n = baysForBeds(dw.beds);
+    if (n < 1) return;
+    // Bays sit in the front garden between the house face and the footway,
+    // pushed to one side of the frontage so a path to the door remains. The
+    // row runs across the frontage, never nose to tail (STP-02(3): tandem
+    // parking avoided). If the full count will not fit, fewer are laid rather
+    // than any bay spilling onto the plot boundary or the carriageway.
+    const halfW = dw.w / 2 + (dw.sideMargin !== undefined ? dw.sideMargin : genParams.sideGap / 2);
+    const standoff = dw.d / 2 + 0.4 + BAY_L / 2;              // house face -> bay centre
+    const lay = (count) => {
+      const rowW = count * BAY_W;
+      if (rowW > 2 * halfW - 0.4) return null;                 // will not fit across the plot
+      const rowCentre = halfW - rowW / 2 - 0.2;                // shift to one side
+      const rects = [];
+      for (let i = 0; i < count; i++) {
+        const along = rowCentre - rowW / 2 + BAY_W / 2 + i * BAY_W;
+        const cx = dw.cx + t.x * along + f.x * standoff;
+        const cy = dw.cy + t.y * along + f.y * standoff;
+        const rect = orientedRect(cx, cy, BAY_W, BAY_L, t, f);
+        if (!rect.every(q => pointInPoly(dw.plot, q.x, q.y))) return null;
+        if (!rect.every(q => !onAnyCarriageway(q.x, q.y, 0))) return null;
+        rects.push(rect);
+      }
+      return rects;
+    };
+    dw.bays = lay(n) || lay(n - 1) || [];
+  });
+}
+
+// Rectangle centred at (cx,cy) with half-extents along axes t (width) and f (length).
+function orientedRect(cx, cy, w, l, t, f) {
+  const hw = w / 2, hl = l / 2;
+  return [
+    { x: cx + t.x * hw + f.x * hl, y: cy + t.y * hw + f.y * hl },
+    { x: cx - t.x * hw + f.x * hl, y: cy - t.y * hw + f.y * hl },
+    { x: cx - t.x * hw - f.x * hl, y: cy - t.y * hw - f.y * hl },
+    { x: cx + t.x * hw - f.x * hl, y: cy + t.y * hw - f.y * hl },
+  ];
+}
+
+function baysProvided() { return dwellings.reduce((s, d) => s + (d.bays ? d.bays.length : 0), 0); }
+function baysRequired() { return dwellings.reduce((s, d) => s + baysForBeds(d.beds), 0); }
+function parkingAreaM2() { return baysProvided() * BAY_W * BAY_L; }
+
+// 2D: bays as light porous-paving rectangles on the frontage.
+function drawParking2d() {
+  if (!dwellings.length) return;
+  ctx.save();
+  dwellings.forEach(dw => {
+    if (!dw.bays) return;
+    dw.bays.forEach(r => {
+      const s = r.map(p => w2s(p.x, p.y));
+      ctx.beginPath();
+      ctx.moveTo(s[0].x, s[0].y);
+      for (let i = 1; i < s.length; i++) ctx.lineTo(s[i].x, s[i].y);
+      ctx.closePath();
+      ctx.fillStyle   = 'rgba(126,155,176,0.30)'; // porous paving, as used for SuDS
+      ctx.strokeStyle = 'rgba(126,155,176,0.75)';
+      ctx.lineWidth   = 0.8;
+      ctx.fill();
+      ctx.stroke();
+    });
+  });
+  ctx.restore();
+}
+
 function plotAreaM2()   { return dwellings.reduce((s, d) => s + (d.plot ? polyArea(d.plot) : 0), 0); }
 function gardenAreaM2() { return dwellings.reduce((s, d) => s + (d.plot ? Math.max(0, polyArea(d.plot) - d.w * d.d) : 0), 0); }
 function plottedCount() { return dwellings.filter(d => d.plot).length; }
@@ -1663,6 +1759,7 @@ function generateScheme() {
   dwellings = dwellings.filter(d => d.plot);
   const droppedNoPlot = beforePlots - dwellings.length;
   if (droppedNoPlot) buildPlots();
+  buildParking(); // STP-02 on-plot bays, once plots are settled
   placedDwellings = dwellings.length;
 
   const lbl = document.getElementById('dwellingCountLabel');
@@ -2688,6 +2785,7 @@ function render() {
   // Generated homes — drawn over the road so frontages read clearly
   drawSplays2d();
   drawPlots2d();
+  drawParking2d();
   drawDwellings2d();
 
   // Access stub / visibility splay (drawn under the entrance marker)
