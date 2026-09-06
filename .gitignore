@@ -1,0 +1,16 @@
+# Local, machine-specific agent settings (paths, permissions) — not shareable.
+.claude/settings.local.json
+
+# Contains personal data: applicant name, home address, telephone and email.
+# The master copy lives in the planning folder and on Google Drive; it does not
+# belong in a code repository.
+Dashlands-Planning/Shelaa Submission.pdf
+
+# Reference photographs and app screenshots — bulky, and reproducible from the
+# app itself. Kept locally, out of git history.
+Dashlands-Planning/*.jpg
+Dashlands-Planning/*.png
+
+# Build output and dependencies
+node_modules/
+studio/dist/
