@@ -102,9 +102,7 @@ let genParams = {
   bufferW:      12,  // m no-build landscape buffer on the WEST (Cuckoo Trail)
   boundaryInset: 6,  // m general no-build inset from the boundary line
   rearGarden:   10,  // m private rear-garden depth behind each home (plot subdivision)
-  targetCount:  15,  // desired dwelling count. 15 is the honest figure for the registered
-                     // title (0.93 ha): 24.7 dw/ha net, just inside the defensible ~19–25
-                     // band. The geometry would take 23, but at 37.9 net — far outside it.
+  targetCount:  24,  // desired dwelling count — default targets the defensible ~19–25 dw/ha band
   solar:        true,// roof-integrated PV on the south-facing slopes
   autoRoad:     true,// auto-lay an estate road spine when none is drawn
 };
@@ -390,10 +388,11 @@ const DASHLANDS_SITE = {
 // The land actually registered under HM Land Registry title ESX45129, traced
 // from the filed title plan (2022-10-12 copy of the plan filed 8/79) and
 // georeferenced from that plan's own 100 m grid. 0.9341 ha — materially SMALLER
-// than the surveyed DXF above (1.5728 ha). The two boundaries follow the same
-// line everywhere except north of the notch, where the DXF encloses an extra
-// ~0.64 ha lobe that the title does not cover. Same projection-only frame as
-// DASHLANDS_SITE, so the entrance and utilities still line up.
+// than the surveyed DXF above (1.5728 ha) because it covers only PART of the
+// holding: the northern field is on a separate deed (see DEEDS/ in the planning
+// folder), and title + deed together match the surveyed boundary. Kept as a
+// selectable extent so the registered strip can be seen on its own. Same
+// projection-only frame as DASHLANDS_SITE, so entrance and utilities line up.
 // Title plans show GENERAL boundaries, not exact lines.
 const TITLE_SITE = {
   origin: { e: 558686.21, n: 106932.53 },
@@ -408,10 +407,11 @@ const SITE_EXTENTS = {
   survey: { label: 'Surveyed site (1.57 ha)',    site: DASHLANDS_SITE },
   title:  { label: 'Registered title (0.93 ha)', site: TITLE_SITE },
 };
-// The landowners confirm (8 Sept 2026) they own ONLY the land inside the red
-// edging on the filed title plan. The registered title is therefore THE site;
-// the larger surveyed boundary is kept for reference and comparison only.
-let siteExtent = 'title';
+// The site is the whole family holding: the 2022 Land Registry title plan for
+// ESX45129 covers only the southern strip (~0.93 ha); the northern field is on
+// a separate deed (DEEDS/273737449_...jpg). Together they match the surveyed
+// boundary. 'title' below draws the registered strip alone, for comparison.
+let siteExtent = 'survey';
 
 // Swap the boundary between the surveyed site and the registered title, then
 // regenerate so the capacity figures move with it. Any hand-drawn scheme is
@@ -4055,15 +4055,15 @@ if (new URLSearchParams(window.location.search).get('load')) {
   // Load the real Dashlands plot on first open (the site to design around)
   setTimeout(() => {
     if (siteClosed || sitePts.length) return; // don't overwrite a boundary loaded before this fires
-    sitePts    = TITLE_SITE.pts.map(p => ({ x: p.x, y: p.y }));
+    sitePts    = DASHLANDS_SITE.pts.map(p => ({ x: p.x, y: p.y }));
     siteClosed = true;
-    dxfOrigin  = { e: TITLE_SITE.origin.e, n: TITLE_SITE.origin.n };
-    fitViewSoon(sitePts);       // frame the ~176×147 m title parcel once laid out
+    dxfOrigin  = { e: DASHLANDS_SITE.origin.e, n: DASHLANDS_SITE.origin.n };
+    fitViewSoon(sitePts);       // frame the ~179×215 m plot once the canvas is laid out
     setDefaultAccessPoint();    // entrance snaps to the confirmed Sayerland Lane access
     setDefaultUtilities();      // utilities land at their documented positions
-    document.getElementById('hintBar').textContent = 'Dashlands site loaded (registered title, 0.93 ha) — Generate a scheme, or draw a road first';
+    document.getElementById('hintBar').textContent = 'Dashlands site loaded — Generate a scheme, or draw a road first';
     updateStats(); render();
     generateScheme(); // show a generated scheme immediately on first open
-    showToast('Dashlands loaded on the registered title (0.93 ha) — scheme generated');
+    showToast('Dashlands site loaded — scheme generated; draw a road, then Generate again');
   }, 300);
 }
