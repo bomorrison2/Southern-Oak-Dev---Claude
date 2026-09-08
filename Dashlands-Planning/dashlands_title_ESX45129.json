@@ -1,0 +1,79 @@
+{
+ "source": "HM Land Registry filed title plan ESX45129 (2022-10-12 copy, filed plan stamped 8/79), red edging traced to the line centreline and georeferenced from the plan's own 100 m National Grid (315.5 px = 40.06 mm @ 1:2500 = 100 m).",
+ "caution": "Coordinates are in the SAME pseudo-grid as dashlands_boundary_osgb.dxf (no OSGB36 datum shift), so they overlay ArchForm directly. They are NOT true OSGB36 National Grid. Title plans show general boundaries, not exact lines.",
+ "area_m2": 9341.3,
+ "area_ha": 0.9341,
+ "perimeter_m": 490.9,
+ "centroid": [
+  558686.21,
+  106932.53
+ ],
+ "vertices": [
+  [
+   558598.73,
+   107006.97
+  ],
+  [
+   558635.5,
+   106977.81
+  ],
+  [
+   558648.81,
+   106986.05
+  ],
+  [
+   558763.23,
+   106908.08
+  ],
+  [
+   558754.04,
+   106889.7
+  ],
+  [
+   558752.14,
+   106871.95
+  ],
+  [
+   558749.6,
+   106859.59
+  ],
+  [
+   558587.64,
+   106960.06
+  ]
+ ],
+ "vertices_centroid_relative": [
+  [
+   -87.48,
+   74.44
+  ],
+  [
+   -50.71,
+   45.28
+  ],
+  [
+   -37.4,
+   53.52
+  ],
+  [
+   77.02,
+   -24.45
+  ],
+  [
+   67.83,
+   -42.83
+  ],
+  [
+   65.93,
+   -60.58
+  ],
+  [
+   63.39,
+   -72.94
+  ],
+  [
+   -98.57,
+   27.53
+  ]
+ ]
+}

@@ -113,10 +113,18 @@ let genParams = {
 let accessPt        = null;
 let movingEntrance  = false; // true while waiting for a click to reposition the entrance
 const ENTRANCE_COL  = '#ff8c00'; // amber — reads clearly against the blue boundary
-// Confirmed Sayerland Lane access, absolute OSGB36 (WGS84 50°50'19.84"N
-// 0°15'17.31"E → BGS OSTN15). Projected onto the boundary at runtime once a DXF
-// gives us the OSGB frame (dxfOrigin); without that frame we use the south tip.
-const ACCESS_OSGB   = { e: 558859.18, n: 106790.66 };
+// Sayerland Lane access, from Ray's Google Earth 'Entrance' placemark
+// (WGS84 50°50'19.84"N 0°15'17.31"E = 50.838844, 0.254808).
+//
+// FRAME WARNING — these are NOT true OSGB36 National Grid. The site DXF was
+// built by running WGS84 lat/long through the National Grid *projection* with
+// no OSGB36 datum shift, so everything here lives in that same projection-only
+// pseudo-grid. Mixing the two frames puts points ~130 m out. The previous value
+// (558859.18, 106790.66) had the datum shift applied and sat 120 m OUTSIDE the
+// boundary; corrected, the pin lands 4.7 m off the south-eastern tip, on the
+// lane — which is where the Land Registry title plan shows the 177'0" (53.9 m)
+// frontage. See MASTERPLAN/BOUNDARY-RESOLVED-v3.0.md.
+const ACCESS_OSGB   = { e: 558742.96, n: 106853.18 };
 // Visibility splay / access stub run into the site from the entrance (metres).
 let accessSplay     = { length: 20, halfWidth: 8 };
 
@@ -376,6 +384,53 @@ const DASHLANDS_SITE = {
     { x:  32.06, y:  34.59 }, { x:  40.87, y:   52.12 }
   ]
 };
+
+// The land actually registered under HM Land Registry title ESX45129, traced
+// from the filed title plan (2022-10-12 copy of the plan filed 8/79) and
+// georeferenced from that plan's own 100 m grid. 0.9341 ha — materially SMALLER
+// than the surveyed DXF above (1.5728 ha). The two boundaries follow the same
+// line everywhere except north of the notch, where the DXF encloses an extra
+// ~0.64 ha lobe that the title does not cover. Same projection-only frame as
+// DASHLANDS_SITE, so the entrance and utilities still line up.
+// Title plans show GENERAL boundaries, not exact lines.
+const TITLE_SITE = {
+  origin: { e: 558686.21, n: 106932.53 },
+  pts: [
+    { x: -87.48, y:  74.44 }, { x: -50.71, y:  45.28 }, { x: -37.40, y:  53.52 },
+    { x:  77.02, y: -24.45 }, { x:  67.83, y: -42.83 }, { x:  65.93, y: -60.58 },
+    { x:  63.39, y: -72.94 }, { x: -98.57, y:  27.53 }
+  ]
+};
+
+const SITE_EXTENTS = {
+  survey: { label: 'Surveyed site (1.57 ha)',    site: DASHLANDS_SITE },
+  title:  { label: 'Registered title (0.93 ha)', site: TITLE_SITE },
+};
+let siteExtent = 'survey';
+
+// Swap the boundary between the surveyed site and the registered title, then
+// regenerate so the capacity figures move with it. Any hand-drawn scheme is
+// cleared — a layout laid out on one boundary is meaningless on the other.
+function setSiteExtent(key) {
+  const opt = SITE_EXTENTS[key];
+  if (!opt) return;
+  siteExtent = key;
+  sitePts    = opt.site.pts.map(p => ({ x: p.x, y: p.y }));
+  siteClosed = true;
+  dxfOrigin  = { e: opt.site.origin.e, n: opt.site.origin.n };
+  dwellings  = []; placedDwellings = 0;
+  road.pts   = []; branches = []; links = [];
+  invalidateSplays();
+  fitViewToBoundary(sitePts);
+  setDefaultAccessPoint();
+  setDefaultUtilities();
+  const sel = document.getElementById('siteExtentSel');
+  if (sel) sel.value = key;
+  updateStats(); render();
+  generateScheme();
+  if (view === '3d') build3d();
+  showToast(opt.label + ' — scheme regenerated');
+}
 
 /* ── CANVAS SETUP ─────────────────────────────────────────── */
 const canvas = document.getElementById('c2d');

@@ -436,6 +436,26 @@
         </div>
       </div>
 
+      <!-- ── Site extent: surveyed site vs registered title ── -->
+      <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
+        <div style="font-family:var(--mono);font-size:9px;letter-spacing:.08em;
+                    text-transform:uppercase;color:var(--text-dimmer);margin-bottom:5px">
+          Site extent
+        </div>
+        <select id="siteExtentSel" onchange="setSiteExtent(this.value)"
+                style="width:100%;background:var(--panel);color:var(--text);
+                       border:1px solid var(--line);border-radius:4px;
+                       font-family:var(--mono);font-size:10px;padding:5px">
+          <option value="survey">Surveyed site — 1.57 ha</option>
+          <option value="title">Registered title ESX45129 — 0.93 ha</option>
+        </select>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text-dimmer);
+                    margin-top:4px;line-height:1.5">
+          ~0.64 ha of the surveyed site lies outside title ESX45129.
+          Ownership of the balance is UNVERIFIED.
+        </div>
+      </div>
+
       <!-- ── DXF boundary import ─────────────────────────── -->
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)"></div>
       <input type="file" id="dxfFileInput" accept=".dxf" style="display:none"
