@@ -102,7 +102,9 @@ let genParams = {
   bufferW:      12,  // m no-build landscape buffer on the WEST (Cuckoo Trail)
   boundaryInset: 6,  // m general no-build inset from the boundary line
   rearGarden:   10,  // m private rear-garden depth behind each home (plot subdivision)
-  targetCount:  24,  // desired dwelling count — default targets the defensible ~19–25 dw/ha band
+  targetCount:  15,  // desired dwelling count. 15 is the honest figure for the registered
+                     // title (0.93 ha): 24.7 dw/ha net, just inside the defensible ~19–25
+                     // band. The geometry would take 23, but at 37.9 net — far outside it.
   solar:        true,// roof-integrated PV on the south-facing slopes
   autoRoad:     true,// auto-lay an estate road spine when none is drawn
 };
@@ -406,7 +408,10 @@ const SITE_EXTENTS = {
   survey: { label: 'Surveyed site (1.57 ha)',    site: DASHLANDS_SITE },
   title:  { label: 'Registered title (0.93 ha)', site: TITLE_SITE },
 };
-let siteExtent = 'survey';
+// The landowners confirm (8 Sept 2026) they own ONLY the land inside the red
+// edging on the filed title plan. The registered title is therefore THE site;
+// the larger surveyed boundary is kept for reference and comparison only.
+let siteExtent = 'title';
 
 // Swap the boundary between the surveyed site and the registered title, then
 // regenerate so the capacity figures move with it. Any hand-drawn scheme is
@@ -938,6 +943,16 @@ function fitViewToAccessDiag() {
   const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
   panX = canvas.width  / 2 - cx * SCALE * zoom;
   panY = canvas.height / 2 + cy * SCALE * zoom;
+}
+
+// On first load the canvas can still have zero size when the bootstrap runs —
+// layout has not settled — which made fitViewToBoundary clamp to the minimum
+// zoom and leave the site as a speck in the top-left corner. Retry on animation
+// frames until the canvas actually has dimensions, then fit.
+function fitViewSoon(pts, tries = 60) {
+  resize();
+  if (canvas.width && canvas.height) { fitViewToBoundary(pts); render(); return; }
+  if (tries > 0) requestAnimationFrame(() => fitViewSoon(pts, tries - 1));
 }
 
 function runAccessDiagnostic() {
@@ -4040,15 +4055,15 @@ if (new URLSearchParams(window.location.search).get('load')) {
   // Load the real Dashlands plot on first open (the site to design around)
   setTimeout(() => {
     if (siteClosed || sitePts.length) return; // don't overwrite a boundary loaded before this fires
-    sitePts    = DASHLANDS_SITE.pts.map(p => ({ x: p.x, y: p.y }));
+    sitePts    = TITLE_SITE.pts.map(p => ({ x: p.x, y: p.y }));
     siteClosed = true;
-    dxfOrigin  = { e: DASHLANDS_SITE.origin.e, n: DASHLANDS_SITE.origin.n };
-    fitViewToBoundary(sitePts); // the plot is ~179×215 m — frame it to the canvas
+    dxfOrigin  = { e: TITLE_SITE.origin.e, n: TITLE_SITE.origin.n };
+    fitViewSoon(sitePts);       // frame the ~176×147 m title parcel once laid out
     setDefaultAccessPoint();    // entrance snaps to the confirmed Sayerland Lane access
     setDefaultUtilities();      // utilities land at their documented positions
-    document.getElementById('hintBar').textContent = 'Dashlands site loaded — Generate a scheme, or draw a road first';
+    document.getElementById('hintBar').textContent = 'Dashlands site loaded (registered title, 0.93 ha) — Generate a scheme, or draw a road first';
     updateStats(); render();
     generateScheme(); // show a generated scheme immediately on first open
-    showToast('Dashlands site loaded — scheme generated; draw a road, then Generate again');
+    showToast('Dashlands loaded on the registered title (0.93 ha) — scheme generated');
   }, 300);
 }
