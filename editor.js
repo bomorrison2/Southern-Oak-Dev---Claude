@@ -403,6 +403,32 @@ const TITLE_SITE = {
   ]
 };
 
+// Indicative attenuation basin at the low south-eastern end of the site.
+//
+// The site is Weald Clay and infiltration is not an option: all four trial pits
+// at Old Loom Mill nearby FAILED BRE365 (Southern Testing, June 2020), so
+// drainage has to be attenuation-led with no soakaways. The basin sits at the
+// low end — Google Earth puts the Sayerland Lane frontage at ~3.8 m against a
+// site median of ~6.9 m — with a short outfall to the ditch along the lane, and
+// inside the eastern heritage buffer, which is land already reserved from
+// building. 811 m2, holding roughly 162 m3.
+//
+// SIZE AND POSITION ARE INDICATIVE. Volumes are scaled from the Old Loom Mill
+// drainage note (Unda Consulting, Aug 2020): 73 m3 of storage per 1,000 m2 of
+// impermeable area, and 0.2 m3 per m2 of basin. The discharge rate must be
+// agreed with ESCC as lead local flood authority. Proper sizing awaits the
+// drainage scope (D4). See MASTERPLAN/MASTERPLAN-STATUS-v4.0.md.
+const DEFAULT_BASIN = {
+  id: 1, type: 'pond',
+  pts: [
+    { x:   72.18, y:   -99.95 }, { x:   73.93, y:   -91.49 }, { x:   76.67, y:   -78.24 },
+    { x:   69.16, y:   -72.96 }, { x:   60.42, y:   -66.82 }, { x:   51.68, y:   -60.67 },
+    { x:   44.69, y:   -55.76 }, { x:   37.21, y:   -60.87 }, { x:   41.72, y:   -67.47 },
+    { x:   47.36, y:   -75.73 }, { x:   52.99, y:   -83.99 }, { x:   57.84, y:   -91.10 },
+    { x:   63.14, y:   -98.86 }, { x:   66.52, y:  -103.81 }
+  ]
+};
+
 const SITE_EXTENTS = {
   survey: { label: 'Surveyed site (1.57 ha)',    site: DASHLANDS_SITE },
   title:  { label: 'Registered title (0.93 ha)', site: TITLE_SITE },
@@ -425,6 +451,11 @@ function setSiteExtent(key) {
   dxfOrigin  = { e: opt.site.origin.e, n: opt.site.origin.n };
   dwellings  = []; placedDwellings = 0;
   road.pts   = []; branches = []; links = [];
+  // the basin was sited on the whole holding; it makes no sense on the strip alone
+  suds = key === 'survey'
+    ? [{ id: DEFAULT_BASIN.id, type: DEFAULT_BASIN.type,
+         pts: DEFAULT_BASIN.pts.map(p => ({ x: p.x, y: p.y })) }]
+    : [];
   invalidateSplays();
   fitViewToBoundary(sitePts);
   setDefaultAccessPoint();
@@ -4061,6 +4092,9 @@ if (new URLSearchParams(window.location.search).get('load')) {
     fitViewSoon(sitePts);       // frame the ~179×215 m plot once the canvas is laid out
     setDefaultAccessPoint();    // entrance snaps to the confirmed Sayerland Lane access
     setDefaultUtilities();      // utilities land at their documented positions
+    suds = [{ id: DEFAULT_BASIN.id, type: DEFAULT_BASIN.type,
+              pts: DEFAULT_BASIN.pts.map(p => ({ x: p.x, y: p.y })) }];
+    sudsId = 2;                 // the generator keeps homes off drawn SuDS
     document.getElementById('hintBar').textContent = 'Dashlands site loaded — Generate a scheme, or draw a road first';
     updateStats(); render();
     generateScheme(); // show a generated scheme immediately on first open
