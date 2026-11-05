@@ -1,5 +1,13 @@
 # Southern-Oak-Dev — Claude Workspace
 
+> **Archived reference (5 Nov 2026).** Active Dashlands development has moved to
+> [`Southern-Oak-Dev---Hark`](https://github.com/bomorrison2/Southern-Oak-Dev---Hark). This repo had no
+> commits after 10 Sep 2026 and is kept read-only for reference. Worth reusing elsewhere: ArchForm
+> Studio's module layout (`studio/src/domain`, `geometry`, `generation`, `ingest`, `persistence`) and its
+> fast test suite (107 tests in ~8 s). The title-plan question from the 8 Sep commits is settled: the
+> holding is two titles, ESX45129 + ESX63391 (see the Hark repo's
+> `docs/SITE_EVIDENCE_AND_SHELAA_2026-10.md`).
+
 ## Purpose
 
 This repository is a **Claude-only development workspace** for the Southern Oak / Dashlands planning tool.
